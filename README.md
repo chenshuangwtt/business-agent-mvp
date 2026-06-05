@@ -85,6 +85,24 @@ User Request
   -> Final Answer
 ```
 
+### 测试覆盖
+
+Skill System 已通过 `tests/skills.test.ts` 覆盖以下行为：
+
+- 加载 3 个内置 Skills：`business_analysis`、`anomaly_investigation`、`report_delivery`。
+- 校验 Skill 声明的 tools 是否存在于 Tool Registry。
+- 根据用户意图选择正确 Skill：
+  - “帮我分析本周订单情况” -> `business_analysis`
+  - “帮我排查退款异常和疑似刷单” -> `anomaly_investigation`
+  - “帮我导出 weekly-report.md” -> `report_delivery`
+- 混合意图下优先选择 `report_delivery`，例如“分析本周订单情况并导出”。
+- 根据 Skill 限制传给 LLM 的工具范围。
+- 多轮会话中自动替换旧的 Skill Context，避免上下文堆叠。
+- `report_delivery` 的 `requires_approval=true` 不会在命中 Skill 后立即触发审批，只有调用 `export_report` 或 `send_report_email` 时才进入审批流程。
+- `/api/skills` 返回当前注册的 Skills。
+
+这些测试确保 Skill Layer 不只是 Prompt 配置，而是实际参与 Agent 路由、工具隔离、上下文注入、审批语义和 API 暴露。
+
 启动时 `SkillLoader` 会扫描 `skills/` 目录，读取每个 skill 的 `skill.yaml` 和 `prompt.md`，并校验 skill 声明的 tools 是否存在于 Tool Registry。请求进入 Agent 后，`SkillSelector` 先按 keyword trigger 匹配用户消息，命中后会把 skill prompt、allowed tools、workflow 和 output format 注入 Agent 上下文，并在 Trace 中记录 `skill_selected`。
 
 `Skill.requires_approval` 表示该 Skill 内包含需要审批的工具，不表示命中 Skill 后立即审批。审批仍由具体工具触发，例如 `report_delivery` 命中后不会立刻返回 `need_approval`，只有实际调用 `export_report` 或 `send_report_email` 时才会进入审批流程。
