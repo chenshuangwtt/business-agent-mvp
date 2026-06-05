@@ -7,6 +7,7 @@ import { listSessions } from "./agent/sessionStore.js";
 import { getTrace, listTraces } from "./trace/traceRecorder.js";
 import { logger } from "./utils/logger.js";
 import { getAvailableLLMConfigs, getLLMConfig } from "./llm/llmClient.js";
+import { getSkillInfos } from "./skills/skillRegistry.js";
 
 const app: express.Express = express();
 app.use(express.json({ limit: "2mb" }));
@@ -77,6 +78,10 @@ app.get("/api/tools", (_req, res) => {
   res.json(getToolInfos());
 });
 
+app.get("/api/skills", (_req, res) => {
+  res.json(getSkillInfos());
+});
+
 app.get("/api/sessions", (_req, res) => {
   res.json(listSessions());
 });
@@ -107,6 +112,7 @@ app.get("/api/health", (_req, res) => {
       provider: config.provider,
       model: config.model,
     })),
+    skills: getSkillInfos().length,
   });
 });
 

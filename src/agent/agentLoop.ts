@@ -13,6 +13,14 @@ import { withTimeout, withRetry } from "../utils/timeout.js";
 import { parallelWithLimit } from "../utils/concurrency.js";
 import { logger } from "../utils/logger.js";
 import { cleanMarkdownOutput } from "../utils/markdown.js";
+import { selectSkill } from "../skills/skillSelector.js";
+import { getSkill } from "../skills/skillRegistry.js";
+import {
+  getTimeMode,
+  resolveDateRangeFromMessage,
+  type ResolvedDateRange,
+} from "../utils/timeMode.js";
+import type { SkillDefinition } from "../skills/types.js";
 import type { AgentResponse, AgentErrorCode, Trace, ToolContext, Session } from "./types.js";
 
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || "6");
@@ -20,27 +28,46 @@ const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || "30000");
 const DEMO_DATA_START = process.env.DEMO_DATA_START || "2026-05-25";
 const DEMO_DATA_END = process.env.DEMO_DATA_END || "2026-06-03";
 
+interface SkillRuntimeContext {
+  skill: SkillDefinition | null;
+  allowedTools?: string[];
+}
+
 function formatDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-function getFallbackDateRange(): { start_date: string; end_date: string } {
-  return {
-    start_date: DEMO_DATA_START,
-    end_date: DEMO_DATA_END,
-  };
+function getFallbackDateRange(session: Session, userMessage: string): ResolvedDateRange {
+  return session.activeTimeRange || resolveDateRangeFromMessage(userMessage);
 }
 
 function buildRuntimeContext(): string {
   const today = formatDate(new Date());
+  const timeMode = getTimeMode();
   return [
     "## 运行时上下文",
     "",
     `- 当前日期：${today}`,
+    `- 当前时间模式：${timeMode}`,
     `- 当前 demo 订单数据范围：${DEMO_DATA_START} 到 ${DEMO_DATA_END}`,
-    "- 用户说“本周”“最近”“本月”等相对时间时，必须优先落在当前 demo 数据范围内。",
-    "- 如果一次 `query_orders` 返回 `count=0`，不要连续猜测更早月份；应改用当前 demo 数据范围，或向用户说明所选日期没有数据。",
-    "- demo 数据只覆盖订单分析场景，不要编造该范围之外的订单数据。",
+    "- demo 模式：相对时间映射到固定演示数据窗口。",
+    "- production 模式：相对时间按真实当前日期解析，例如本周为当前自然周、本月为当前自然月、今天为当前日期。",
+    "- 报告周期必须以工具查询周期为准。",
+    "- 如果一次 `query_orders` 返回 `count=0`，不要编造订单数据；production 模式不要自动改用 demo 数据窗口。",
+  ].join("\n");
+}
+
+function buildTimeContext(range: ResolvedDateRange): string {
+  return [
+    "<time_context>",
+    "## 当前请求时间解析",
+    "",
+    `- timeMode: ${range.timeMode}`,
+    `- resolvedRange: ${range.start_date} 至 ${range.end_date}`,
+    `- source: ${range.source}`,
+    `- reason: ${range.reason}`,
+    "- 用户使用相对时间时，调用 `query_orders` 必须优先使用上述 resolvedRange。",
+    "</time_context>",
   ].join("\n");
 }
 
@@ -57,9 +84,35 @@ export async function runAgent(
   // 2. 创建 trace
   const trace = createTrace();
   session.traceIds.push(trace.traceId);
-  addTraceStep(trace, "user_message", { content: userMessage, sessionId: session.sessionId });
+  const resolvedTimeRange = resolveDateRangeFromMessage(userMessage);
+  session.activeTimeRange = resolvedTimeRange;
+  addTraceStep(trace, "user_message", {
+    content: userMessage,
+    sessionId: session.sessionId,
+    timeRange: resolvedTimeRange,
+  });
 
   logger.info(`[Agent] 开始处理: traceId=${trace.traceId}, sessionId=${session.sessionId}`);
+
+  const skillSelection = selectSkill(userMessage);
+  const selectedSkill = skillSelection.selectedSkill;
+  const allowedTools = selectedSkill?.tools;
+  session.activeSkill = selectedSkill
+    ? { name: selectedSkill.name, tools: selectedSkill.tools }
+    : undefined;
+
+  addTraceStep(trace, "skill_selected", {
+    skillName: selectedSkill?.name || null,
+    displayName: selectedSkill?.displayName,
+    confidence: skillSelection.confidence,
+    reason: skillSelection.reason,
+    allowedTools: allowedTools || [],
+    priority: selectedSkill?.selection.priority,
+    riskLevel: selectedSkill?.riskLevel,
+    requiresApproval: selectedSkill?.requiresApproval,
+    constraints: selectedSkill?.constraints || [],
+    expectedSections: selectedSkill?.expectedSections || [],
+  });
 
   // 3. 初始化会话消息
   if (session.messages.length === 0) {
@@ -67,13 +120,21 @@ export async function runAgent(
     session.messages.push({ role: "system", content: systemPrompt });
     session.messages.push({ role: "system", content: buildRuntimeContext() });
   }
+
+  removeTimeContextMessages(session);
+  session.messages.push({ role: "system", content: buildTimeContext(resolvedTimeRange) });
+
+  removeSkillContextMessages(session);
+  if (selectedSkill) {
+    session.messages.push({ role: "system", content: buildSkillContext(selectedSkill) });
+  }
   session.messages.push({ role: "user", content: userMessage });
 
   // 4. 修剪消息防止超长
   trimMessagesIfNeeded(session);
 
   // 5. 获取工具定义
-  const tools = getToolsForLLM();
+  const tools = getToolsForLLM(allowedTools);
 
   // 6. 检查 LLM 是否可用
   const llmConfigs = getAvailableLLMConfigs();
@@ -83,7 +144,7 @@ export async function runAgent(
   }
 
   // 7. 进入核心循环
-  return agentLoopCore(session, trace, tools);
+  return agentLoopCore(session, trace, tools, { skill: selectedSkill, allowedTools });
 }
 
 /**
@@ -92,7 +153,8 @@ export async function runAgent(
 async function agentLoopCore(
   session: Session,
   trace: Trace,
-  tools: any[]
+  tools: any[],
+  skillContext: SkillRuntimeContext = { skill: null }
 ): Promise<AgentResponse> {
   const messages = session.messages;
 
@@ -115,6 +177,7 @@ async function agentLoopCore(
       toolsCount: tools.length,
       round: round + 1,
       timeoutMs: LLM_TIMEOUT_MS,
+      skillName: skillContext.skill?.name,
     });
 
     // 调用 LLM
@@ -237,6 +300,17 @@ async function agentLoopCore(
           role: "tool",
           tool_call_id: toolCallId,
           content: JSON.stringify({ error: errorMsg, code: "INVALID_TOOL" }),
+        });
+        continue;
+      }
+
+      if (skillContext.allowedTools && !skillContext.allowedTools.includes(toolName)) {
+        const errorMsg = `工具不在当前 Skill 允许范围内: ${toolName}`;
+        addTraceStep(trace, "tool_error", { toolName, code: "PERMISSION_DENIED", message: errorMsg });
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCallId,
+          content: JSON.stringify({ error: errorMsg, code: "PERMISSION_DENIED" }),
         });
         continue;
       }
@@ -515,8 +589,9 @@ export async function resumeAgent(
 
     // 重新进入 LLM 循环让模型生成回复
     if (getAvailableLLMConfigs().length > 0) {
-      const tools = getToolsForLLM();
-      return agentLoopCore(session, trace, tools);
+      const skillContext = getSessionSkillContext(session);
+      const tools = getToolsForLLM(skillContext.allowedTools);
+      return agentLoopCore(session, trace, tools, skillContext);
     }
 
     const answer = "用户拒绝了操作，流程已终止。";
@@ -567,8 +642,68 @@ export async function resumeAgent(
     };
   }
 
-  const tools = getToolsForLLM();
-  return agentLoopCore(session, trace, tools);
+  const skillContext = getSessionSkillContext(session);
+  const tools = getToolsForLLM(skillContext.allowedTools);
+  return agentLoopCore(session, trace, tools, skillContext);
+}
+
+function buildSkillContext(skill: SkillDefinition): string {
+  return [
+    "<skill_context>",
+    `## 当前 Skill：${skill.displayName} (${skill.name})`,
+    "",
+    skill.prompt,
+    "",
+    "### Allowed Tools",
+    skill.tools.map((tool) => `- ${tool}`).join("\n"),
+    "",
+    "### Workflow",
+    skill.workflow.map((step, index) => `${index + 1}. ${step}`).join("\n"),
+    "",
+    "### Constraints",
+    skill.constraints.length > 0 ? skill.constraints.map((item) => `- ${item}`).join("\n") : "- 无",
+    "",
+    "### Expected Sections",
+    skill.expectedSections.length > 0
+      ? skill.expectedSections.map((item) => `- ${item}`).join("\n")
+      : "- 无",
+    "",
+    skill.approval
+      ? `### Approval Policy\n${skill.approval.policy || "按工具风险等级执行审批。"}`
+      : "### Approval Policy\n按工具风险等级执行审批。",
+    "",
+    `### Execution Mode\n${skill.executionMode}`,
+    "",
+    `### Output Format\n${skill.outputFormat}`,
+    "",
+    "本轮回答应优先遵循当前 Skill 的工具范围、流程和输出格式。",
+    "</skill_context>",
+  ].join("\n");
+}
+
+function removeSkillContextMessages(session: Session): void {
+  session.messages = session.messages.filter((message: any) => {
+    if (message.role !== "system") return true;
+    if (typeof message.content !== "string") return true;
+    return !message.content.startsWith("<skill_context>");
+  });
+}
+
+function removeTimeContextMessages(session: Session): void {
+  session.messages = session.messages.filter((message: any) => {
+    if (message.role !== "system") return true;
+    if (typeof message.content !== "string") return true;
+    return !message.content.startsWith("<time_context>");
+  });
+}
+
+function getSessionSkillContext(session: Session): SkillRuntimeContext {
+  if (!session.activeSkill) return { skill: null };
+  const skill = getSkill(session.activeSkill.name) || null;
+  return {
+    skill,
+    allowedTools: session.activeSkill.tools,
+  };
 }
 
 /**
@@ -594,7 +729,7 @@ async function handleFallback(
       logger: (msg) => logger.info(`[Fallback] ${msg}`),
     };
 
-    const fallbackRange = getFallbackDateRange();
+    const fallbackRange = getFallbackDateRange(session, userMessage);
     const queryResult = await queryOrdersTool.execute(
       {
         start_date: fallbackRange.start_date,
@@ -607,7 +742,7 @@ async function handleFallback(
     );
 
     const metrics = await calculateMetricsTool.execute(
-      { orders: queryResult.orders },
+      { orders: queryResult.orders, query: queryResult.query },
       toolContext
     );
 

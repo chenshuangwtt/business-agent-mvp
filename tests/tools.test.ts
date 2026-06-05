@@ -6,6 +6,7 @@ import { z } from "zod";
 import { calculateMetricsTool } from "../src/tools/calculateMetrics.ts";
 import { exportReportTool } from "../src/tools/exportReport.ts";
 import { findAnomaliesTool } from "../src/tools/findAnomalies.ts";
+import { generateReportTool } from "../src/tools/generateReport.ts";
 import { queryOrdersTool } from "../src/tools/queryOrders.ts";
 import { execToolWithTrace } from "../src/agent/agentLoop.ts";
 import { getToolsForLLM, initToolRegistry } from "../src/agent/toolRegistry.ts";
@@ -135,6 +136,64 @@ test("calculate_metrics keeps financial numbers deterministic", async () => {
   assert.equal(metrics.avg_order_value, 3050);
   assert.equal(metrics.sales_by_channel.web, 100);
   assert.equal(metrics.sales_by_channel.miniapp, 6000);
+  assert.deepEqual(metrics.period, {
+    start_date: "2026-06-01",
+    end_date: "2026-06-02",
+    label: "2026-06-01 至 2026-06-02",
+  });
+});
+
+test("calculate_metrics uses query period when provided", async () => {
+  const metrics = await calculateMetricsTool.execute(
+    {
+      orders: sampleOrders(),
+      query: { start_date: "2026-05-25", end_date: "2026-06-03" },
+    },
+    context
+  );
+
+  assert.deepEqual(metrics.period, {
+    start_date: "2026-05-25",
+    end_date: "2026-06-03",
+    label: "2026-05-25 至 2026-06-03",
+  });
+});
+
+test("generate_report fallback uses metrics period in report", async () => {
+  const oldProfiles = process.env.LLM_PROFILES;
+  const oldOpenAIKey = process.env.OPENAI_API_KEY;
+  const oldLLMKey = process.env.LLM_API_KEY;
+  const oldPrimaryKey = process.env.LLM_PRIMARY_API_KEY;
+  const oldBackupKey = process.env.LLM_BACKUP_API_KEY;
+
+  try {
+    delete process.env.LLM_PROFILES;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.LLM_API_KEY;
+    delete process.env.LLM_PRIMARY_API_KEY;
+    delete process.env.LLM_BACKUP_API_KEY;
+
+    const metrics = await calculateMetricsTool.execute(
+      {
+        orders: sampleOrders(),
+        query: { start_date: "2026-05-25", end_date: "2026-06-03" },
+      },
+      context
+    );
+    const result = await generateReportTool.execute(
+      { metrics, anomalies: [], rules: [], template: "经营分析简报" },
+      context
+    );
+
+    assert.match(result.content, /2026-05-25 至 2026-06-03/);
+    assert.doesNotMatch(result.content, /报告周期\*\*：2026-05-25 至 2026-05-31/);
+  } finally {
+    restoreEnv("LLM_PROFILES", oldProfiles);
+    restoreEnv("OPENAI_API_KEY", oldOpenAIKey);
+    restoreEnv("LLM_API_KEY", oldLLMKey);
+    restoreEnv("LLM_PRIMARY_API_KEY", oldPrimaryKey);
+    restoreEnv("LLM_BACKUP_API_KEY", oldBackupKey);
+  }
 });
 
 test("find_anomalies flags large orders and high refund days", async () => {
@@ -254,3 +313,8 @@ test("search_business_rules thrown error fallback records one fallback trace ste
     if (existsSync(traceDir)) rmSync(traceDir, { recursive: true, force: true });
   }
 });
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}

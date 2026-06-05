@@ -12,6 +12,8 @@
 ###
 ### 3. 无 OPENAI_API_KEY 时会进入 fallback 模式。
 ###    Demo 数据窗口：2026-05-25 ~ 2026-06-03，共 200 笔订单。
+###    TIME_MODE=demo 时相对时间使用 demo 数据窗口。
+###    TIME_MODE=production 时相对时间按真实当前日期解析，不会自动回退到 demo 窗口。
 ###
 ### 4. 本文件适合 VS Code REST Client / JetBrains HTTP Client 手动验收。
 ###    自动测试请运行：
@@ -27,6 +29,9 @@ GET {{baseUrl}}/api/health
 
 ### 2. 查看工具列表
 GET {{baseUrl}}/api/tools
+
+### 2.1 查看 Skill 列表
+GET {{baseUrl}}/api/skills
 
 ### 3. 普通经营分析
 # @name demoAnalysis

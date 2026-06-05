@@ -30,6 +30,65 @@
 
 Demo 数据窗口为 `2026-05-25` 到 `2026-06-03`，共 200 笔订单。无 LLM fallback 模式使用该数据窗口。
 
+## 时间模式
+
+项目通过 `TIME_MODE` 区分演示环境和正式环境的相对时间解析。
+
+```env
+TIME_MODE=demo
+```
+
+| 模式 | 相对时间处理 | 适用场景 |
+|---|---|---|
+| `demo` | “本周”“本月”“今天”“最近”等优先映射到固定 demo 数据窗口 `2026-05-25 至 2026-06-03` | 本地演示、固定样例数据、截图录制 |
+| `production` | 按真实当前日期解析自然周、自然月、当天和最近 N 天 | 接真实数据库、线上服务、真实经营分析 |
+
+示例：真实当前日期为 `2026-06-05` 时，`TIME_MODE=production` 会解析为：
+
+| 用户说法 | 查询周期 |
+|---|---|
+| 今天 / 本日 | `2026-06-05 至 2026-06-05` |
+| 本周 | `2026-06-01 至 2026-06-07` |
+| 本月 | `2026-06-01 至 2026-06-30` |
+| 最近 7 天 | `2026-05-30 至 2026-06-05` |
+
+时间边界由 Agent 的时间解析层确定，数据库只接收明确的 `start_date` 和 `end_date` 执行查询。`production` 模式查询不到数据时不会自动回退到 demo 数据窗口，报告会说明当前查询周期没有匹配订单。
+
+## Skill System
+
+Skill 是建立在 Tool Registry 和 Agent Loop 之上的能力包。Tool 负责执行单个确定性动作，Skill 负责把一组工具、触发规则、Prompt、执行流程、输出格式和风险策略组合成面向场景的能力。
+
+### Tool vs Skill
+
+| 层级 | 作用 | 示例 |
+|---|---|---|
+| Tool | 单个可调用能力，包含参数 schema、风险等级和执行函数 | `query_orders`、`generate_report`、`export_report` |
+| Skill | 面向业务场景的组合能力，声明触发词、可用工具、流程和输出格式 | `business_analysis`、`anomaly_investigation` |
+
+### 内置 Skills
+
+| Skill | 名称 | 说明 | 工具范围 |
+|---|---|---|---|
+| `business_analysis` | 经营分析 | 常规订单经营分析、指标计算、异常识别和报告生成 | `query_orders`、`calculate_metrics`、`find_anomalies`、`search_business_rules`、`generate_report` |
+| `anomaly_investigation` | 异常排查 | 退款、大额订单、疑似刷单、渠道或地区波动排查 | `query_orders`、`calculate_metrics`、`find_anomalies`、`search_business_rules`、`generate_report` |
+| `report_delivery` | 报告交付 | 报告生成、导出和邮件发送模拟 | `query_orders`、`calculate_metrics`、`find_anomalies`、`search_business_rules`、`generate_report`、`export_report`、`send_report_email` |
+
+### 执行流程
+
+```text
+User Request
+  -> SkillSelector
+  -> Skill Prompt + Allowed Tools
+  -> Agent Loop
+  -> Tool Calls
+  -> Trace / Approval
+  -> Final Answer
+```
+
+启动时 `SkillLoader` 会扫描 `skills/` 目录，读取每个 skill 的 `skill.yaml` 和 `prompt.md`，并校验 skill 声明的 tools 是否存在于 Tool Registry。请求进入 Agent 后，`SkillSelector` 先按 keyword trigger 匹配用户消息，命中后会把 skill prompt、allowed tools、workflow 和 output format 注入 Agent 上下文，并在 Trace 中记录 `skill_selected`。
+
+`Skill.requires_approval` 表示该 Skill 内包含需要审批的工具，不表示命中 Skill 后立即审批。审批仍由具体工具触发，例如 `report_delivery` 命中后不会立刻返回 `need_approval`，只有实际调用 `export_report` 或 `send_report_email` 时才会进入审批流程。
+
 ## 架构
 
 ```mermaid
@@ -180,6 +239,12 @@ curl -X POST http://localhost:3001/api/chat `
 
 ```powershell
 curl http://localhost:3001/api/tools
+```
+
+### 查看 Skill 列表
+
+```powershell
+curl http://localhost:3001/api/skills
 ```
 
 ### 查看 Trace 列表

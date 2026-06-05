@@ -21,6 +21,20 @@ export interface ToolInfo {
   requiresApproval: boolean
 }
 
+export interface SkillInfo {
+  name: string
+  displayName: string
+  description: string
+  tools: string[]
+  executionMode: string
+  riskLevel: RiskLevel
+  requiresApproval: boolean
+  selection: {
+    priority: number
+    confidenceThreshold: number
+  }
+}
+
 export interface SessionInfo {
   sessionId: string
   createdAt: string
@@ -47,6 +61,7 @@ export interface HealthResponse {
   status: string
   timestamp: string
   llmAvailable: boolean
+  skills?: number
 }
 
 export interface ChatMessage {

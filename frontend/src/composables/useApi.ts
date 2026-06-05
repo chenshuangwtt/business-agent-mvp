@@ -3,6 +3,7 @@ import type {
   AgentResponse,
   HealthResponse,
   SessionInfo,
+  SkillInfo,
   ToolInfo,
   Trace,
 } from '@/types/api'
@@ -55,6 +56,7 @@ export function useApi() {
     approve: (approvalId: string, approved: boolean) =>
       post<AgentResponse>('/api/approve', { approvalId, approved }),
     getTools: () => get<ToolInfo[]>('/api/tools'),
+    getSkills: () => get<SkillInfo[]>('/api/skills'),
     getSessions: () => get<SessionInfo[]>('/api/sessions'),
     getTraces: () => get<{ traceId: string; createdAt: string; stepCount: number }[]>('/api/traces'),
     getTrace: (traceId: string) => get<Trace>(`/api/traces/${traceId}`),

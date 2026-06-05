@@ -1,0 +1,70 @@
+name: business_analysis
+displayName: 经营分析
+
+metadata:
+  version: 1.0.0
+  owner: business-agent-mvp
+  category: business_analysis
+
+description: |
+  面向订单经营数据的常规分析能力，覆盖订单查询、指标计算、异常识别、业务规则检索和报告生成。
+  适用于本周订单分析、销售情况分析、经营报告生成、GMV 和退款率等核心指标分析。
+
+triggers:
+  keywords:
+    - 经营分析
+    - 订单情况
+    - 本周订单
+    - 本月订单
+    - 销售情况
+    - 销售分析
+    - 经营报告
+    - 运营报告
+    - GMV
+    - 净销售额
+    - 客单价
+    - 订单分析
+    - 业绩分析
+    - 数据分析
+
+tools:
+  - query_orders
+  - calculate_metrics
+  - find_anomalies
+  - search_business_rules
+  - generate_report
+
+workflow:
+  - 识别分析时间范围和分析目标
+  - 查询订单数据
+  - 计算 GMV、净销售额、订单数、退款金额、退款率、客单价等核心经营指标
+  - 识别异常订单、异常日期和经营风险
+  - 检索经营分析规则、异常判断规则和退款规则
+  - 生成结构化经营分析报告
+  - 输出核心结论、指标、异常证据和建议动作
+
+execution_mode: sequential
+risk_level: low
+requires_approval: false
+output_format: Markdown 经营分析报告
+
+selection:
+  priority: 70
+  confidence_threshold: 0.6
+
+constraints:
+  - 优先使用技能声明的工具完成分析
+  - 不编造订单数据、金额、订单数、退款率、客单价、订单号、客户、渠道或地区
+  - 指标必须使用明确数值
+  - 异常必须说明数据证据
+  - 建议动作必须可执行
+  - 不执行导出、发送邮件、删除或修改数据等高风险操作
+
+expected_sections:
+  - 核心结论
+  - 分析范围
+  - 核心指标
+  - 异常与风险
+  - 业务规则依据
+  - 建议动作
+  - 不确定性说明

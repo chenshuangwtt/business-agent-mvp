@@ -16,6 +16,14 @@ const InputSchema = z.object({
   anomalies: z.array(z.any()).describe("异常发现列表"),
   rules: z.array(z.any()).optional().describe("相关业务规则"),
   template: z.string().default("经营分析简报").describe("报告模板名称"),
+  period: z
+    .object({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+      label: z.string().optional(),
+    })
+    .optional()
+    .describe("报告周期，优先使用工具查询周期"),
 });
 
 export const generateReportTool: AgentTool = {
@@ -26,21 +34,21 @@ export const generateReportTool: AgentTool = {
   requiresApproval: false,
   inputSchema: InputSchema,
   execute: async (args, context: ToolContext) => {
-    const { metrics, anomalies, rules, template } = InputSchema.parse(args);
+    const { metrics, anomalies, rules, template, period } = InputSchema.parse(args);
 
     context.logger(`生成报告: template=${template}`);
 
     if (getAvailableLLMConfigs().length > 0) {
       try {
-        return await generateWithLLM(metrics, anomalies, rules || [], template, context);
+        return await generateWithLLM(metrics, anomalies, rules || [], template, period, context);
       } catch (err: any) {
         context.logger(`LLM 报告生成失败，使用 fallback: ${err.message}`);
-        return generateFallback(metrics, anomalies, rules || [], true, err.message);
+        return generateFallback(metrics, anomalies, rules || [], period, true, err.message);
       }
     }
 
     context.logger("无 LLM，使用本地模板 fallback 生成报告");
-    return generateFallback(metrics, anomalies, rules || [], false);
+    return generateFallback(metrics, anomalies, rules || [], period, false);
   },
 };
 
@@ -49,14 +57,17 @@ async function generateWithLLM(
   anomalies: any[],
   rules: any[],
   template: string,
+  period: any,
   context: ToolContext
 ): Promise<any> {
   const reportPrompt = loadReportPrompt();
+  const reportPeriod = resolvePeriod(metrics, period);
   const prompt = reportPrompt
     .replace("{{metrics}}", JSON.stringify(metrics, null, 2))
     .replace("{{anomalies}}", JSON.stringify(anomalies, null, 2))
     .replace("{{rules}}", JSON.stringify(rules, null, 2))
-    .replace("{{template}}", template);
+    .replace("{{template}}", template)
+    .replace("{{period}}", reportPeriod.label);
 
   context.logger("LLM 生成报告");
 
@@ -82,6 +93,7 @@ async function generateWithLLM(
     provider: result.config.provider,
     profile: result.config.profile,
     attempts: result.attempts,
+    period: reportPeriod,
     fallback: false,
   };
 }
@@ -104,6 +116,7 @@ function generateFallback(
   metrics: any,
   anomalies: any[],
   rules: any[],
+  period: any,
   llmFailed: boolean,
   errorMessage?: string
 ): any {
@@ -134,7 +147,7 @@ function generateFallback(
   }
 
   const now = new Date().toISOString();
-  const period = "当前查询周期";
+  const reportPeriod = resolvePeriod(metrics, period);
   const netSales = Number(metrics?.net_sales) || 0;
 
   const channelRows = metrics?.sales_by_channel
@@ -173,7 +186,7 @@ function generateFallback(
       : "未检索到业务规则片段，建议人工复核关键口径。";
 
   const replacements: Record<string, string> = {
-    "{{period}}": period,
+    "{{period}}": reportPeriod.label,
     "{{generated_at}}": now,
     "{{data_source}}": "data/orders.csv",
     "{{conclusion}}": llmFailed
@@ -213,7 +226,17 @@ function generateFallback(
     method: "fallback",
     fallback: true,
     llmFailed,
+    period: reportPeriod,
     fallbackReason: llmFailed ? "LLM_REPORT_GENERATION_FAILED" : "LLM_UNAVAILABLE",
     errorMessage,
   };
+}
+
+function resolvePeriod(metrics: any, period?: any): { start_date: string; end_date: string; label: string } {
+  const source = period || metrics?.period || {};
+  const start = source.start_date || "";
+  const end = source.end_date || "";
+  const label = source.label || (start && end ? `${start} 至 ${end}` : "当前查询周期");
+
+  return { start_date: start, end_date: end, label };
 }

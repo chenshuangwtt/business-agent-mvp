@@ -1,0 +1,80 @@
+name: report_delivery
+displayName: 报告交付
+
+metadata:
+  version: 1.0.0
+  owner: business-agent-mvp
+  category: business_delivery
+
+description: |
+  面向报告生成、导出和邮件发送模拟的交付能力。
+  该技能会先生成报告内容，再根据用户意图处理导出文件或发送邮件。
+  导出文件和发送邮件属于中高风险动作，必须经过系统审批流程。
+
+triggers:
+  keywords:
+    - 导出
+    - 保存
+    - 发送
+    - 邮件
+    - 发邮件
+    - 交付
+    - 报告文件
+    - weekly-report
+    - monthly-report
+    - report.md
+    - 生成报告并导出
+    - 生成报告并发送
+
+tools:
+  - query_orders
+  - calculate_metrics
+  - find_anomalies
+  - search_business_rules
+  - generate_report
+  - export_report
+  - send_report_email
+
+workflow:
+  - 识别用户交付意图：仅生成、导出、发送、导出并发送
+  - 如无报告内容，先查询订单数据
+  - 计算核心经营指标
+  - 识别异常订单和经营风险
+  - 检索业务规则
+  - 生成报告内容
+  - 如涉及导出或发送，发起审批流程
+  - 审批通过后执行交付工具
+  - 审批拒绝时明确说明交付动作未执行
+  - 返回报告内容和交付状态
+
+execution_mode: approval_gated
+risk_level: high
+requires_approval: true
+output_format: Markdown 报告和交付结果说明
+
+approval:
+  required_tools:
+    - export_report
+    - send_report_email
+  policy: |
+    export_report 和 send_report_email 必须等待系统审批。
+    审批通过前不得声称报告已导出或邮件已发送。
+    审批拒绝时必须明确说明操作未执行。
+
+selection:
+  priority: 90
+  confidence_threshold: 0.65
+
+constraints:
+  - 必须先生成报告内容，再处理导出或发送请求
+  - 导出文件和发送邮件必须经过审批
+  - 审批通过前不得声称交付动作已经完成
+  - 审批被拒绝时必须说明操作未执行
+  - 不编造文件名、发送状态、收件人、订单数据或指标
+  - 不向用户未明确指定的邮箱发送报告
+  - 文件名必须安全，不允许路径穿越或危险后缀
+
+expected_sections:
+  - 报告内容
+  - 交付状态
+  - 后续操作

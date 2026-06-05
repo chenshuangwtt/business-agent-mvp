@@ -1,0 +1,67 @@
+name: anomaly_investigation
+displayName: 异常排查
+
+metadata:
+  version: 1.0.0
+  owner: business-agent-mvp
+  category: business_analysis
+
+description: |
+  面向退款异常、大额订单、疑似刷单、渠道波动、地区波动和客户行为异常的经营异常排查能力。
+  该技能会基于订单数据、指标计算结果、异常识别结果和业务规则，输出结构化异常排查报告。
+
+triggers:
+  keywords:
+    - 异常
+    - 风险
+    - 刷单
+    - 退款率
+    - 退款异常
+    - 大额订单
+    - 大额交易
+    - 排查
+    - 波动
+    - 渠道异常
+    - 地区异常
+    - 可疑订单
+    - 高风险订单
+
+tools:
+  - query_orders
+  - calculate_metrics
+  - find_anomalies
+  - search_business_rules
+  - generate_report
+
+workflow:
+  - 确认查询时间范围和筛选条件
+  - 查询订单数据
+  - 计算退款率、GMV、订单数、客单价等关键指标
+  - 识别异常并提取数据证据
+  - 检索异常判断规则和业务处理规则
+  - 区分数据事实和分析推断
+  - 输出异常排查结论和建议动作
+
+execution_mode: sequential
+risk_level: low
+requires_approval: false
+output_format: Markdown 异常排查报告
+
+selection:
+  priority: 80
+  confidence_threshold: 0.6
+
+constraints:
+  - 不编造订单数据
+  - 不编造订单号、客户、渠道、地区、金额或退款记录
+  - 不将推断表述为事实
+  - 不直接认定欺诈或恶意行为
+  - 建议动作需要能落到渠道、地区、订单或客户维度
+
+expected_sections:
+  - 异常排查结论
+  - 影响范围
+  - 数据证据
+  - 分析推断
+  - 建议动作
+  - 不确定性说明

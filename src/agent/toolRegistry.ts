@@ -51,8 +51,9 @@ export function getToolInfos(): ToolInfo[] {
 /**
  * 获取 OpenAI 格式的工具定义
  */
-export function getToolsForLLM(): any[] {
-  return getAllTools().map((t) => ({
+export function getToolsForLLM(allowedToolNames?: string[]): any[] {
+  const allowed = allowedToolNames ? new Set(allowedToolNames) : null;
+  return getAllTools().filter((t) => !allowed || allowed.has(t.name)).map((t) => ({
     type: "function" as const,
     function: {
       name: t.name,
@@ -147,6 +148,11 @@ function zodFieldToJsonSchema(field: any): any {
  * 初始化：注册所有内置工具
  */
 export function initToolRegistry(): void {
+  if (tools.size > 0) {
+    logger.debug(`[ToolRegistry] 已初始化，共 ${tools.size} 个工具`);
+    return;
+  }
+
   registerTool(queryOrdersTool);
   registerTool(calculateMetricsTool);
   registerTool(findAnomaliesTool);

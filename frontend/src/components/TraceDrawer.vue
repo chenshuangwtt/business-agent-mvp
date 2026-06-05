@@ -68,6 +68,7 @@ const maxDur = computed(() => {
 
 const META: Record<string, { label: string; icon: any; tone: string }> = {
   user_message: { label: '用户输入', icon: MessageSquare, tone: 'trace-accent' },
+  skill_selected: { label: '技能选择', icon: Brain, tone: 'trace-accent' },
   llm_request: { label: 'LLM 请求', icon: Brain, tone: 'trace-accent' },
   llm_response: { label: 'LLM 响应', icon: Brain, tone: 'trace-accent' },
   tool_decision: { label: '工具决策', icon: Wrench, tone: 'trace-neutral' },
@@ -103,6 +104,10 @@ function summary(step: TraceStep): string {
   switch (step.type) {
     case 'user_message':
       return (data.content || '').slice(0, 60)
+    case 'skill_selected':
+      return data.skillName
+        ? `${data.displayName || data.skillName} · ${(data.allowedTools || []).length} 个工具`
+        : data.reason || '未命中 Skill'
     case 'llm_request':
       return `${data.model || 'model'} · ${data.messagesCount || 0} 条消息`
     case 'llm_response':

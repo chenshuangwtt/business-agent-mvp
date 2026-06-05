@@ -18,6 +18,13 @@ const OrderSchema = z.object({
 
 const InputSchema = z.object({
   orders: z.array(OrderSchema).describe("订单数据数组"),
+  query: z
+    .object({
+      start_date: z.string().optional(),
+      end_date: z.string().optional(),
+    })
+    .optional()
+    .describe("订单查询条件，可用于报告周期"),
 });
 
 function roundMoney(value: number): number {
@@ -32,7 +39,10 @@ export const calculateMetricsTool: AgentTool = {
   requiresApproval: false,
   inputSchema: InputSchema,
   execute: async (args, context: ToolContext) => {
-    const { orders } = InputSchema.parse(args) as { orders: Order[] };
+    const { orders, query } = InputSchema.parse(args) as {
+      orders: Order[];
+      query?: { start_date?: string; end_date?: string };
+    };
 
     context.logger(`计算指标: ${orders.length} 笔订单`);
 
@@ -69,6 +79,7 @@ export const calculateMetricsTool: AgentTool = {
       .sort((a, b) => b.sales - a.sales);
 
     const metrics: Metrics = {
+      period: inferPeriod(orders, query),
       gmv: roundMoney(gmv),
       net_sales: roundMoney(netSales),
       paid_orders: paidOrders.length,
@@ -84,3 +95,20 @@ export const calculateMetricsTool: AgentTool = {
     return metrics;
   },
 };
+
+function inferPeriod(
+  orders: Order[],
+  query?: { start_date?: string; end_date?: string }
+): Metrics["period"] {
+  const dates = orders.map((order) => order.order_date).filter(Boolean).sort();
+  const start = query?.start_date || dates[0] || "";
+  const end = query?.end_date || dates[dates.length - 1] || start;
+
+  if (!start || !end) return undefined;
+
+  return {
+    start_date: start,
+    end_date: end,
+    label: `${start} 至 ${end}`,
+  };
+}

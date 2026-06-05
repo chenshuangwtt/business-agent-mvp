@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type OpenAI from "openai";
+import type { ResolvedDateRange } from "../utils/timeMode.js";
 
 // ========== 风险等级 ==========
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -37,6 +38,7 @@ export interface AgentTool {
 // ========== Trace 步骤类型 ==========
 export type TraceStepType =
   | "user_message"
+  | "skill_selected"
   | "llm_request"
   | "llm_response"
   | "tool_decision"
@@ -71,6 +73,11 @@ export interface Session {
   createdAt: string;
   lastActivity: string;
   traceIds: string[];
+  activeSkill?: {
+    name: string;
+    tools: string[];
+  };
+  activeTimeRange?: ResolvedDateRange;
 }
 
 // ========== 审批请求 ==========
@@ -124,6 +131,11 @@ export interface Order {
 
 // ========== 经营指标 ==========
 export interface Metrics {
+  period?: {
+    start_date: string;
+    end_date: string;
+    label: string;
+  };
   gmv: number;
   net_sales: number;
   paid_orders: number;

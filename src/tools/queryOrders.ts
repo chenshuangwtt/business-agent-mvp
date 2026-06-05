@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { readCSV } from "../utils/csv.js";
 import type { AgentTool, Order, ToolContext } from "../agent/types.js";
+import { getTimeMode } from "../utils/timeMode.js";
 
 const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式必须为 YYYY-MM-DD");
 const DEMO_DATA_START = process.env.DEMO_DATA_START || "2026-05-25";
@@ -55,27 +56,42 @@ export const queryOrdersTool: AgentTool = {
       return true;
     });
 
-    const emptyHint =
-      filtered.length === 0
-        ? {
-            emptyReason: `当前 demo 订单数据只覆盖 ${DEMO_DATA_START} 到 ${DEMO_DATA_END}，本次查询没有匹配订单。`,
-            suggestedQuery: {
-              start_date: DEMO_DATA_START,
-              end_date: DEMO_DATA_END,
-              status,
-              channel,
-              region,
-            },
-          }
-        : {};
+    const timeMode = getTimeMode();
+    const emptyHint = filtered.length === 0 ? buildEmptyHint(timeMode, status, channel, region) : {};
 
     return {
       orders: filtered,
       count: filtered.length,
       source: "data/orders.csv",
+      timeMode,
       availableRange: { start_date: DEMO_DATA_START, end_date: DEMO_DATA_END },
       query: { start_date, end_date, status, channel, region },
       ...emptyHint,
     };
   },
 };
+
+function buildEmptyHint(
+  timeMode: string,
+  status: string,
+  channel: string,
+  region: string
+): Record<string, any> {
+  if (timeMode === "production") {
+    return {
+      emptyReason:
+        "当前 TIME_MODE=production，本次按传入日期查询没有匹配订单；系统不会自动回退到 demo 数据窗口。",
+    };
+  }
+
+  return {
+    emptyReason: `当前 demo 订单数据只覆盖 ${DEMO_DATA_START} 到 ${DEMO_DATA_END}，本次查询没有匹配订单。`,
+    suggestedQuery: {
+      start_date: DEMO_DATA_START,
+      end_date: DEMO_DATA_END,
+      status,
+      channel,
+      region,
+    },
+  };
+}
