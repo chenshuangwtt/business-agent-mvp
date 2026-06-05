@@ -1,0 +1,283 @@
+@baseUrl = http://localhost:3001
+@frontendUrl = http://localhost:5173
+
+### ============================================================
+### 使用说明
+### ============================================================
+### 1. 后端启动：
+###    pnpm run dev
+###
+### 2. 前端开发服务可选：
+###    pnpm --dir frontend run dev -- --host 0.0.0.0
+###
+### 3. 无 OPENAI_API_KEY 时会进入 fallback 模式。
+###    Demo 数据窗口：2026-05-25 ~ 2026-06-03，共 200 笔订单。
+###
+### 4. 本文件适合 VS Code REST Client / JetBrains HTTP Client 手动验收。
+###    自动测试请运行：
+###    pnpm run test
+###    pnpm run check
+
+### ============================================================
+### 基础端点
+### ============================================================
+
+### 健康检查
+GET {{baseUrl}}/api/health
+
+### 工具列表
+GET {{baseUrl}}/api/tools
+
+### 会话列表
+GET {{baseUrl}}/api/sessions
+
+### Trace 列表
+GET {{baseUrl}}/api/traces
+
+### 后端托管页面
+GET {{baseUrl}}/
+
+### 前端开发页面（需要单独启动 Vite）
+GET {{frontendUrl}}/
+
+### ============================================================
+### Fallback 模式验收（不配置 OPENAI_API_KEY）
+### ============================================================
+
+### Fallback：自动查询 demo 数据、计算指标、识别异常、生成报告
+# @name fallbackReport
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析本周订单情况，找出异常并生成经营分析报告"
+}
+
+### 查看 fallback 产生的 Trace
+GET {{baseUrl}}/api/traces/{{fallbackReport.response.body.traceId}}
+
+### ============================================================
+### LLM 模式验收（配置 OPENAI_API_KEY 后）
+### ============================================================
+
+### 指标分析
+# @name llmMetrics
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析 2026-05-25 到 2026-06-03 的订单数据，计算 GMV、净销售额、退款率和客单价"
+}
+
+### 异常分析
+# @name llmAnomalies
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "找出 2026-05-25 到 2026-06-03 期间的大额订单、高退款和疑似刷单风险"
+}
+
+### 复杂报告生成
+# @name llmReport
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析 2026-05-25 到 2026-06-03 的订单，检索业务规则，并生成一份经营分析报告"
+}
+
+### 查看 LLM 报告 Trace
+GET {{baseUrl}}/api/traces/{{llmReport.response.body.traceId}}
+
+### ============================================================
+### 多轮会话
+### ============================================================
+
+### 第一轮：创建新会话
+# @name firstRound
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析最近两周的订单数据，先计算核心指标"
+}
+
+### 第二轮：复用 sessionId 继续追问
+# @name secondRound
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "根据上面的分析，哪些异常需要重点关注？",
+  "sessionId": "{{firstRound.response.body.sessionId}}"
+}
+
+### 第三轮：同一会话生成报告
+# @name thirdRound
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "请基于上面的分析生成一份经营分析报告",
+  "sessionId": "{{firstRound.response.body.sessionId}}"
+}
+
+### 查看第三轮 Trace
+GET {{baseUrl}}/api/traces/{{thirdRound.response.body.traceId}}
+
+### ============================================================
+### 审批：导出报告
+### ============================================================
+
+### 触发导出审批
+# @name triggerExportApproval
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析本周订单情况，生成经营分析报告，并导出为 weekly-report.md"
+}
+
+### 审批通过
+# @name approveExport
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "{{triggerExportApproval.response.body.approvalId}}",
+  "approved": true
+}
+
+### 查看导出审批 Trace
+GET {{baseUrl}}/api/traces/{{approveExport.response.body.traceId}}
+
+### 触发导出审批后拒绝
+# @name triggerRejectExportApproval
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析本周订单，生成报告并导出为 rejected-report.md"
+}
+
+### 审批拒绝
+# @name rejectExport
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "{{triggerRejectExportApproval.response.body.approvalId}}",
+  "approved": false
+}
+
+### ============================================================
+### 审批：邮件发送模拟
+### ============================================================
+
+### 触发邮件发送审批
+# @name triggerEmailApproval
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析本周订单情况，生成报告并发送到 demo@example.com"
+}
+
+### 审批邮件发送
+# @name approveEmail
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "{{triggerEmailApproval.response.body.approvalId}}",
+  "approved": true
+}
+
+### ============================================================
+### 错误场景
+### ============================================================
+
+### 缺少 message 字段，应返回 400
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "msg": "错误字段"
+}
+
+### 空消息，应返回 400
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": ""
+}
+
+### 审批不存在，应返回 404
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "approval-not-found",
+  "approved": true
+}
+
+### 审批缺少 approved 字段，应返回 400
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "approval-some-id"
+}
+
+### Trace 不存在，应返回 404
+GET {{baseUrl}}/api/traces/trace-not-found
+
+### ============================================================
+### 并发/复杂任务手动验收（更适合 LLM 模式）
+### ============================================================
+
+### 地区对比
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析华东和华南两个地区的订单情况，对比两个地区的 GMV、退款率和异常差异"
+}
+
+### 渠道退款分析
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我找出退款率最高的渠道和地区，分析原因，并生成包含改进建议的报告"
+}
+
+### ============================================================
+### 快速连续请求手动验收
+### ============================================================
+
+### 快速请求 1
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "查询华东地区的订单数量"
+}
+
+### 快速请求 2
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "查询华南地区的订单数量"
+}
+
+### 快速请求 3
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "查询华北地区的订单数量"
+}
