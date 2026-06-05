@@ -371,7 +371,7 @@ async function agentLoopCore(
  * 执行单个工具，返回结果 JSON 字符串
  * 支持超时、重试、降级，记录 Trace
  */
-async function execToolWithTrace(
+export async function execToolWithTrace(
   toolName: string,
   tool: any,
   args: any,

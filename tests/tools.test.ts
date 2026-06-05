@@ -2,12 +2,15 @@ import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { z } from "zod";
 import { calculateMetricsTool } from "../src/tools/calculateMetrics.ts";
 import { exportReportTool } from "../src/tools/exportReport.ts";
 import { findAnomaliesTool } from "../src/tools/findAnomalies.ts";
 import { queryOrdersTool } from "../src/tools/queryOrders.ts";
+import { execToolWithTrace } from "../src/agent/agentLoop.ts";
 import { getToolsForLLM, initToolRegistry } from "../src/agent/toolRegistry.ts";
-import type { Order, ToolContext } from "../src/agent/types.ts";
+import { createTrace } from "../src/trace/traceRecorder.ts";
+import type { AgentTool, Order, ToolContext } from "../src/agent/types.ts";
 
 const context: ToolContext = {
   traceId: "trace-test",
@@ -184,4 +187,70 @@ test("tool JSON schema does not mark default fields as required", () => {
 
   assert.ok(queryOrders);
   assert.deepEqual(queryOrders.function.parameters.required, ["start_date", "end_date"]);
+});
+
+test("fallback tool result records one fallback trace step", async () => {
+  const trace = createTrace();
+  const traceDir = join(process.cwd(), "logs", trace.traceId);
+  const tool: AgentTool = {
+    name: "search_business_rules",
+    description: "test fallback result",
+    riskLevel: "low",
+    requiresApproval: false,
+    inputSchema: z.any(),
+    execute: async () => ({
+      results: [],
+      query: "指标口径",
+      total: 0,
+      fallback: true,
+      error: "业务规则检索失败，将使用默认规则",
+    }),
+  };
+
+  try {
+    await execToolWithTrace("search_business_rules", tool, { query: "指标口径" }, trace, false);
+    const fallbackSteps = trace.steps.filter((step) => step.type === "fallback");
+
+    assert.equal(fallbackSteps.length, 1);
+    assert.equal(fallbackSteps[0].data.toolName, "search_business_rules");
+  } finally {
+    if (existsSync(traceDir)) rmSync(traceDir, { recursive: true, force: true });
+  }
+});
+
+test("search_business_rules thrown error fallback records one fallback trace step", async () => {
+  const trace = createTrace();
+  const traceDir = join(process.cwd(), "logs", trace.traceId);
+  const oldMaxRetry = process.env.MAX_RETRY;
+  const tool: AgentTool = {
+    name: "search_business_rules",
+    description: "test thrown fallback",
+    riskLevel: "low",
+    requiresApproval: false,
+    inputSchema: z.any(),
+    execute: async () => {
+      throw new Error("forced retrieval failure");
+    },
+  };
+
+  try {
+    process.env.MAX_RETRY = "0";
+    const resultJson = await execToolWithTrace(
+      "search_business_rules",
+      tool,
+      { query: "指标口径" },
+      trace,
+      false
+    );
+    const result = JSON.parse(resultJson);
+    const fallbackSteps = trace.steps.filter((step) => step.type === "fallback");
+
+    assert.equal(result.fallback, true);
+    assert.equal(fallbackSteps.length, 1);
+    assert.equal(fallbackSteps[0].data.toolName, "search_business_rules");
+  } finally {
+    if (oldMaxRetry === undefined) delete process.env.MAX_RETRY;
+    else process.env.MAX_RETRY = oldMaxRetry;
+    if (existsSync(traceDir)) rmSync(traceDir, { recursive: true, force: true });
+  }
 });
