@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AddressInfo } from "node:net";
+import app from "../src/server.ts";
 import { initToolRegistry, getToolsForLLM } from "../src/agent/toolRegistry.ts";
 import { runAgent } from "../src/agent/agentLoop.ts";
 import { getSession } from "../src/agent/sessionStore.ts";
@@ -24,25 +29,75 @@ test("skill loader registers built-in skills and validates tools", () => {
   assert.deepEqual(delivery?.approval?.requiredTools, ["export_report", "send_report_email"]);
 });
 
-test("skill selector matches keyword triggers", () => {
+test("loadSkills throws when a skill references a missing tool", () => {
+  initToolRegistry();
+  const dir = mkdtempSync(join(tmpdir(), "business-agent-skills-"));
+  const skillDir = join(dir, "broken_skill");
+  mkdirSync(skillDir, { recursive: true });
+
+  writeFileSync(
+    join(skillDir, "skill.yaml"),
+    [
+      "name: broken_skill",
+      "displayName: Broken Skill",
+      "description: Broken skill for tests",
+      "triggers:",
+      "  - broken",
+      "tools:",
+      "  - missing_tool",
+      "workflow:",
+      "  - run missing tool",
+      "execution_mode: sequential",
+      "risk_level: low",
+      "requires_approval: false",
+      "output_format: Markdown",
+    ].join("\n"),
+    "utf-8"
+  );
+  writeFileSync(join(skillDir, "prompt.md"), "Broken prompt", "utf-8");
+
+  try {
+    assert.throws(() => loadSkills(dir), /missing_tool/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    loadSkills();
+  }
+});
+
+test("selectSkill matches business analysis intent", () => {
   initToolRegistry();
   loadSkills();
 
-  const selection = selectSkill("帮我找出退款率最高的渠道和异常风险");
+  const selection = selectSkill("帮我分析本周订单情况");
+
+  assert.equal(selection.selectedSkill?.name, "business_analysis");
+});
+
+test("selectSkill matches anomaly investigation intent", () => {
+  initToolRegistry();
+  loadSkills();
+
+  const selection = selectSkill("帮我排查退款异常和疑似刷单");
 
   assert.equal(selection.selectedSkill?.name, "anomaly_investigation");
   assert.equal(selection.confidence, 0.8);
 });
 
-test("skill selector prioritizes report delivery for delivery intents", () => {
+test("selectSkill matches report delivery intent", () => {
   initToolRegistry();
   loadSkills();
 
-  const exportSelection = selectSkill("帮我分析本周订单情况并导出");
-  const saveSelection = selectSkill("帮我分析本周订单情况，生成报告并保存");
+  const selection = selectSkill("帮我导出 weekly-report.md");
 
-  assert.equal(exportSelection.selectedSkill?.name, "report_delivery");
-  assert.equal(saveSelection.selectedSkill?.name, "report_delivery");
+  assert.equal(selection.selectedSkill?.name, "report_delivery");
+});
+
+test("skill selector prioritizes report delivery for mixed delivery intents", () => {
+  initToolRegistry();
+  loadSkills();
+
+  assert.equal(selectSkill("帮我分析本周订单情况并导出").selectedSkill?.name, "report_delivery");
+  assert.equal(selectSkill("帮我分析本周订单情况，生成报告并保存").selectedSkill?.name, "report_delivery");
 });
 
 test("skill tools limit LLM tool definitions", () => {
@@ -128,6 +183,29 @@ test("skill approval flag does not create approval before approval tool call", a
     restoreEnv("LLM_API_KEY", oldLLMKey);
     restoreEnv("LLM_PRIMARY_API_KEY", oldPrimaryKey);
     restoreEnv("LLM_BACKUP_API_KEY", oldBackupKey);
+  }
+});
+
+test("/api/skills returns built-in skills", async () => {
+  initToolRegistry();
+  loadSkills();
+
+  const server = app.listen(0);
+  try {
+    const { port } = server.address() as AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${port}/api/skills`);
+    const skills = (await response.json()) as Array<{ name: string }>;
+
+    assert.equal(response.status, 200);
+    assert.equal(skills.length, 3);
+    assert.deepEqual(
+      skills.map((skill) => skill.name).sort(),
+      ["anomaly_investigation", "business_analysis", "report_delivery"]
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
   }
 });
 
