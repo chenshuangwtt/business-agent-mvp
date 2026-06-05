@@ -19,20 +19,71 @@
 ###    pnpm run check
 
 ### ============================================================
-### 基础端点
+### 核心演示分组
 ### ============================================================
 
-### 健康检查
+### 1. 健康检查
 GET {{baseUrl}}/api/health
 
-### 工具列表
+### 2. 查看工具列表
 GET {{baseUrl}}/api/tools
+
+### 3. 普通经营分析
+# @name demoAnalysis
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析本周订单情况，找出异常并生成经营分析报告"
+}
+
+### 4. 导出报告审批
+# @name demoExportApproval
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我分析本周订单情况，生成经营分析报告，并导出为 weekly-report.md"
+}
+
+### 5. 审批通过
+# @name demoApproveExport
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "{{demoExportApproval.response.body.approvalId}}",
+  "approved": true
+}
+
+### 6. 发送邮件审批
+# @name demoEmailApproval
+POST {{baseUrl}}/api/chat
+Content-Type: application/json
+
+{
+  "message": "帮我生成经营分析报告，并发送到 demo@example.com"
+}
+
+### 7. 审批拒绝
+# @name demoRejectEmail
+POST {{baseUrl}}/api/approve
+Content-Type: application/json
+
+{
+  "approvalId": "{{demoEmailApproval.response.body.approvalId}}",
+  "approved": false
+}
+
+### 8. 查看 Trace 列表
+GET {{baseUrl}}/api/traces
+
+### ============================================================
+### 其他基础端点
+### ============================================================
 
 ### 会话列表
 GET {{baseUrl}}/api/sessions
-
-### Trace 列表
-GET {{baseUrl}}/api/traces
 
 ### 后端托管页面
 GET {{baseUrl}}/

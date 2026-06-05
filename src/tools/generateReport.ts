@@ -35,7 +35,7 @@ export const generateReportTool: AgentTool = {
         return await generateWithLLM(metrics, anomalies, rules || [], template, context);
       } catch (err: any) {
         context.logger(`LLM 报告生成失败，使用 fallback: ${err.message}`);
-        return generateFallback(metrics, anomalies, rules || [], true);
+        return generateFallback(metrics, anomalies, rules || [], true, err.message);
       }
     }
 
@@ -104,7 +104,8 @@ function generateFallback(
   metrics: any,
   anomalies: any[],
   rules: any[],
-  llmFailed: boolean
+  llmFailed: boolean,
+  errorMessage?: string
 ): any {
   const templatePath = join(process.cwd(), "data", "report_template.md");
   let content: string;
@@ -212,5 +213,7 @@ function generateFallback(
     method: "fallback",
     fallback: true,
     llmFailed,
+    fallbackReason: llmFailed ? "LLM_REPORT_GENERATION_FAILED" : "LLM_UNAVAILABLE",
+    errorMessage,
   };
 }

@@ -188,6 +188,72 @@ curl http://localhost:3001/api/tools
 curl http://localhost:3001/api/traces
 ```
 
+## 演示流程
+
+### 场景 1：普通经营分析
+
+用户输入：
+
+```text
+帮我分析本周订单情况，找出异常并生成经营分析报告
+```
+
+重点观察：
+
+- `query_orders` 查询 demo 订单数据。
+- `calculate_metrics` 计算 GMV、净销售额、退款率和客单价。
+- `find_anomalies` 识别大额订单、高退款和疑似刷单风险。
+- `search_business_rules` 检索经营分析规则。
+- `generate_report` 生成经营分析报告。
+- Trace 中可以看到完整工具链路。
+
+### 场景 2：导出报告审批
+
+用户输入：
+
+```text
+帮我分析本周订单情况，生成经营分析报告，并导出为 weekly-report.md
+```
+
+重点观察：
+
+- Agent 返回 `need_approval`。
+- 前端显示审批卡。
+- 用户点击确认后执行 `export_report`。
+- Trace 记录 `approval_required`、`approval_result`、`tool_call`、`tool_result`。
+
+### 场景 3：拒绝审批
+
+用户输入：
+
+```text
+帮我生成报告并发送到 demo@example.com
+```
+
+操作方式：
+
+- `send_report_email` 是 high risk 工具。
+- 前端出现审批卡后选择拒绝。
+
+重点观察：
+
+- Trace 记录 `USER_REJECTED`。
+- Agent 给出自然语言说明。
+- 系统不会假装邮件已发送。
+
+### 场景 4：LLM / 工具失败降级
+
+触发方式：
+
+- 不配置 `LLM_API_KEY`，系统进入 fallback 模式。
+- 或将 `LLM_TIMEOUT_MS` 设置为很小的值，触发 LLM timeout。
+
+重点观察：
+
+- 系统仍可基于 CSV 数据生成本地模板报告。
+- Trace 中出现 `fallback`。
+- 报告中说明这是 fallback 结果。
+
 ## 审批流程
 
 导出报告和发送邮件属于中高风险工具，Agent 会返回 `need_approval`，前端会渲染审批卡。
@@ -253,6 +319,79 @@ curl -X POST http://localhost:3001/api/approve `
 | 权限治理 | Critical 直接拒绝，中高风险审批 | 工具风险等级 |
 | 降级策略 | RAG 失败返回空结果，LLM 失败用模板 | 内置 |
 | 错误分类 | `AgentErrorCode` 枚举 | 内置 |
+
+## 当前限制与生产化改造
+
+本项目不是企业级完整系统，而是用于验证 Agent 工程关键控制点的 MVP：多工具编排、风险审批、稳定性治理、Trace 可观测性和 RAG / 工具 / LLM 的架构取舍。
+
+### 审批存储
+
+当前审批请求保存在内存 `Map` 中，服务重启会丢失。
+
+生产化改造：
+
+- 使用 Redis 或数据库持久化审批请求。
+- 增加 TTL。
+- 增加审批人身份。
+- 增加审批幂等。
+- 增加审批审计日志。
+
+### 权限系统
+
+当前实现风险等级策略：low 直接执行，medium / high 需要审批，critical 直接拒绝。
+
+生产化改造：
+
+- 接入用户身份。
+- 按角色控制工具权限。
+- 按数据范围控制可查询内容。
+- 高风险动作接入企业审批流。
+
+### 数据源
+
+当前使用 CSV 模拟订单数据。
+
+生产化改造：
+
+- 替换为 MySQL / PostgreSQL / ClickHouse。
+- 增加只读账号。
+- 增加 SQL 白名单或查询 DSL。
+- 增加查询审计。
+
+### RAG
+
+当前使用 Markdown + 关键词检索模拟 RAG。
+
+生产化改造：
+
+- 文档切片。
+- embedding。
+- 向量检索。
+- 混合检索。
+- rerank。
+- 引用溯源。
+- 权限过滤。
+
+### Trace
+
+当前 Trace 主要存在本地日志和本地 JSON 文件中。
+
+生产化改造：
+
+- 存入数据库。
+- 支持按 `traceId`、`sessionId`、`toolName`、`status` 查询。
+- 增加失败率、耗时、token 成本统计。
+- 接入监控告警。
+
+### 多实例部署
+
+当前 MVP 更适合单机本地演示。
+
+生产化改造：
+
+- session、approval、trace 使用外部存储。
+- 工具执行增加幂等。
+- 审批恢复支持跨实例可用。
 
 ## 测试与验收
 

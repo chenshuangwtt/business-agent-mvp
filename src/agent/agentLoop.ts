@@ -241,6 +241,20 @@ async function agentLoopCore(
         continue;
       }
 
+      let parsedArgs: any;
+      try {
+        parsedArgs = tool.inputSchema.parse(args);
+      } catch (err: any) {
+        const errorMsg = `工具参数校验失败: ${formatSchemaError(err)}`;
+        addTraceStep(trace, "tool_error", { toolName, code: "INVALID_ARGS", message: errorMsg });
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCallId,
+          content: JSON.stringify({ error: errorMsg, code: "INVALID_ARGS" }),
+        });
+        continue;
+      }
+
       // 权限检查
       const permission = checkPermission(tool.riskLevel);
       if (!permission.allowed) {
@@ -262,7 +276,7 @@ async function agentLoopCore(
           session.sessionId,
           toolName,
           tool.riskLevel,
-          args,
+          parsedArgs,
           approvalMessage,
           assistantMessage,
           toolCallId
@@ -283,7 +297,7 @@ async function agentLoopCore(
           approvalId: approval.approvalId,
           toolName,
           riskLevel: tool.riskLevel,
-          arguments: args,
+          arguments: parsedArgs,
           message: approvalMessage,
         };
       }
@@ -292,10 +306,10 @@ async function agentLoopCore(
         toolName,
         riskLevel: tool.riskLevel,
         requiresApproval: tool.requiresApproval,
-        arguments: args,
+        arguments: parsedArgs,
       });
 
-      validCalls.push({ toolCallId, toolName, tool, args });
+      validCalls.push({ toolCallId, toolName, tool, args: parsedArgs });
     }
 
     // 第二步：并发执行所有通过预检查的工具
@@ -379,7 +393,7 @@ async function execToolWithTrace(
   const startTime = Date.now();
 
   try {
-    const result = await withRetry(
+    const result: any = await withRetry(
       () => withTimeout(tool.execute(args, toolContext), undefined, toolName),
       undefined,
       toolName
@@ -392,6 +406,14 @@ async function execToolWithTrace(
       resultSummary: summarizeResult(result),
       concurrent,
     });
+
+    if (result?.fallback === true) {
+      addTraceStep(trace, "fallback", {
+        toolName,
+        reason: getFallbackReason(toolName, result),
+        resultSummary: summarizeResult(result),
+      });
+    }
 
     return JSON.stringify(result);
   } catch (err: any) {
@@ -643,6 +665,28 @@ function tryFallback(toolName: string, args: any, error: any): any {
     };
   }
   return null;
+}
+
+function formatSchemaError(err: any): string {
+  const issues = err?.issues;
+  if (Array.isArray(issues) && issues.length > 0) {
+    return issues
+      .map((issue: any) => {
+        const path = issue.path?.length ? issue.path.join(".") : "arguments";
+        return `${path}: ${issue.message}`;
+      })
+      .join("; ");
+  }
+  return err?.message || "参数不合法";
+}
+
+function getFallbackReason(toolName: string, result: any): string {
+  if (toolName === "generate_report") {
+    return result.llmFailed
+      ? "LLM 报告生成失败，使用本地模板生成报告"
+      : "使用本地模板生成报告";
+  }
+  return result.fallbackReason || result.error || "工具使用 fallback 结果";
 }
 
 /**
