@@ -1,4 +1,5 @@
 import { calculateMetricSnapshot, previousPeriod } from "./metrics.js";
+import { allocateCents } from "./allocation.js";
 import type { AnalysisDimension, BusinessDataModel, BusinessQuery, DimensionContribution } from "./types.js";
 
 export type ContributionMetric = "refund" | "payment";
@@ -38,8 +39,12 @@ function aggregate(data: BusinessDataModel, query: BusinessQuery, metric: Contri
     else if (dimension === "region") add(result, order.region, event.amount);
     else {
       const orderItems = items.get(event.order_id) || [];
-      const total = orderItems.reduce((sum, item) => sum + item.line_amount_cents, 0);
-      for (const item of orderItems) add(result, products.get(item.product_id)?.product_name || item.product_id, total ? Math.round(event.amount * item.line_amount_cents / total) : 0);
+      const allocations = allocateCents(event.amount, orderItems.map((item) => ({
+        key: products.get(item.product_id)?.product_name || item.product_id,
+        weight: item.line_amount_cents,
+      })));
+      if (!allocations.size) add(result, "未关联商品", event.amount);
+      for (const [key, amount] of allocations) add(result, key, amount);
     }
   }
   return result;

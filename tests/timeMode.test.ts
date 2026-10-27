@@ -34,19 +34,19 @@ test("a current-week question that compares with last week keeps the current-wee
 
 test("demo date resolution clamps incomplete windows to the actual data coverage", () => {
   const coverage = getBusinessDataCoverage();
-  assert.deepEqual(coverage, { startDate: "2026-03-31", endDate: "2026-09-29" });
+  assert.deepEqual(coverage, { startDate: "2026-04-01", endDate: "2026-09-30" });
 
   withEnv({ TIME_MODE: "demo", DEMO_REFERENCE_DATE: "2026-10-04" }, () => {
     const defaultRange = resolveDateRangeFromMessage("哪个商品对退款增长影响最大？");
     const explicitRange = resolveDateRangeFromMessage("分析 2026-09-28 到 2026-10-04 的订单");
 
-    assert.deepEqual([defaultRange.start_date, defaultRange.end_date], ["2026-09-23", "2026-09-29"]);
-    assert.deepEqual([explicitRange.start_date, explicitRange.end_date], ["2026-09-28", "2026-09-29"]);
+    assert.deepEqual([defaultRange.start_date, defaultRange.end_date], ["2026-09-24", "2026-09-30"]);
+    assert.deepEqual([explicitRange.start_date, explicitRange.end_date], ["2026-09-28", "2026-09-30"]);
     assert.match(explicitRange.reason, /可用观察窗口/);
 
     const comparison = compareMetricPeriods(getBusinessData(), "dataset-time-window", explicitRange);
-    assert.equal(comparison.current.period.label, "2026-09-28 至 2026-09-29");
-    assert.equal(comparison.previous.period.label, "2026-09-26 至 2026-09-27");
+    assert.equal(comparison.current.period.label, "2026-09-28 至 2026-09-30");
+    assert.equal(comparison.previous.period.label, "2026-09-25 至 2026-09-27");
   });
 });
 

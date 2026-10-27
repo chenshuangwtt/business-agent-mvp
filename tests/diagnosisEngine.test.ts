@@ -53,15 +53,15 @@ test("refund product contribution is ranked even when overall refund amount decl
 
   assert.equal(state.goal, "refund_contribution");
   assert.ok(state.comparison.changes.successful_refund_amount_cents.absolute_change < 0);
-  assert.equal(top?.value, "数据分析课程");
-  assert.equal(top?.delta_amount_cents, 20942);
-  assert.ok(Math.abs((top?.contribution_ratio || 0) - 0.679009143375916) < 1e-12);
-  assert.ok(state.confirmed_facts.some((item) => item.includes("退款增长最多的商品是 数据分析课程")));
+  assert.equal(top?.value, "年度会员");
+  assert.equal(top?.delta_amount_cents, 69900);
+  assert.ok(Math.abs((top?.contribution_ratio || 0) - 69900 / 99800) < 1e-12);
+  assert.ok(state.confirmed_facts.some((item) => item.includes("退款增长最多的商品是 年度会员")));
   assert.equal(state.anomalies.length, 0);
 });
 
 test("refund product ranking explains when no product refund amount increased", () => {
-  const state = diagnose("哪个商品对退款增长影响最大？", { start_date: "2026-08-05", end_date: "2026-08-11" });
+  const state = diagnose("哪个商品对退款增长影响最大？", { start_date: "2026-08-06", end_date: "2026-08-12" });
   const products = state.contributions.filter((item) => item.dimension === "product");
 
   assert.ok(products.length > 0);

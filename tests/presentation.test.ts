@@ -73,12 +73,12 @@ test("refund contribution question selects refund ranking KPI cards instead of a
     ["current_refund_amount", "previous_refund_amount", "refund_amount_change", "primary_contribution_ratio"]
   );
   assert.equal(presentation.summaryStatus, "warning");
-  assert.match(presentation.summary, /数据分析课程/);
-  assert.match(presentation.summary, /占商品退款增长合计 67.9%/);
+  assert.match(presentation.summary, /年度会员/);
+  assert.match(presentation.summary, /占商品退款增长合计 70.0%/);
 });
 
 test("refund contribution without growth uses neutral summary status", () => {
-  const state = diagnose("哪个商品对退款增长影响最大？", { start_date: "2026-08-05", end_date: "2026-08-11" });
+  const state = diagnose("哪个商品对退款增长影响最大？", { start_date: "2026-08-06", end_date: "2026-08-12" });
   const presentation = buildBusinessPresentation(state);
 
   assert.equal(presentation.summaryStatus, "neutral");

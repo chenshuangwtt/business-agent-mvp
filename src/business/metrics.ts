@@ -6,6 +6,7 @@ import type {
   MetricSnapshot,
   PeriodComparison,
 } from "./types.js";
+import { allocateCents } from "./allocation.js";
 
 type Dimension = "channel" | "region" | "category";
 
@@ -20,9 +21,16 @@ export function calculateMetricSnapshot(data: BusinessDataModel, query: Business
   const successfulPayments = data.payments.filter(
     (payment) => payment.payment_status === "success" && eligibleOrderIds.has(payment.order_id) && inRange(payment.succeeded_at, query)
   );
-  const paymentIds = new Set(successfulPayments.map((payment) => payment.payment_id));
+  const successfulPaymentById = new Map(
+    data.payments
+      .filter((payment) => payment.payment_status === "success" && eligibleOrderIds.has(payment.order_id))
+      .map((payment) => [payment.payment_id, payment])
+  );
   const successfulRefunds = data.refunds.filter(
-    (refund) => refund.refund_status === "success" && paymentIds.has(refund.payment_id) && inRange(refund.completed_at, query)
+    (refund) => refund.refund_status === "success"
+      && eligibleOrderIds.has(refund.order_id)
+      && successfulPaymentById.get(refund.payment_id)?.order_id === refund.order_id
+      && inRange(refund.completed_at, query)
   );
 
   const successfulPaymentAmount = sum(successfulPayments.map((payment) => payment.amount_cents));
@@ -99,17 +107,30 @@ function dimensionMetrics(
     result[key][field] += cents;
     result[key].net_cash_inflow_cents = result[key].successful_payment_amount_cents - result[key].successful_refund_amount_cents;
   };
-  for (const payment of payments) for (const key of keysFor(dimension, payment.order_id, orders, itemsByOrder, products)) add(key, "successful_payment_amount_cents", payment.amount_cents);
-  for (const refund of refunds) for (const key of keysFor(dimension, refund.order_id, orders, itemsByOrder, products)) add(key, "successful_refund_amount_cents", refund.refund_amount_cents);
+  for (const payment of payments) {
+    for (const [key, cents] of allocationFor(dimension, payment.order_id, payment.amount_cents, orders, itemsByOrder, products)) {
+      add(key, "successful_payment_amount_cents", cents);
+    }
+  }
+  for (const refund of refunds) {
+    for (const [key, cents] of allocationFor(dimension, refund.order_id, refund.refund_amount_cents, orders, itemsByOrder, products)) {
+      add(key, "successful_refund_amount_cents", cents);
+    }
+  }
   return result;
 }
 
-function keysFor(dimension: Dimension, orderId: string, orders: Map<string, any>, itemsByOrder: Map<string, any[]>, products: Map<string, any>): string[] {
+function allocationFor(dimension: Dimension, orderId: string, amountCents: number, orders: Map<string, any>, itemsByOrder: Map<string, any[]>, products: Map<string, any>): Array<[string, number]> {
   const order = orders.get(orderId);
   if (!order) return [];
-  if (dimension === "channel") return [order.channel];
-  if (dimension === "region") return [order.region];
-  return [...new Set((itemsByOrder.get(orderId) || []).map((item) => products.get(item.product_id)?.category).filter(Boolean))];
+  if (dimension === "channel") return [[order.channel, amountCents]];
+  if (dimension === "region") return [[order.region, amountCents]];
+  const weights = (itemsByOrder.get(orderId) || []).map((item) => ({
+    key: products.get(item.product_id)?.category || "未分类",
+    weight: item.line_amount_cents,
+  }));
+  const allocations = allocateCents(amountCents, weights);
+  return allocations.size ? [...allocations] : [["未分类", amountCents]];
 }
 
 function matchesOrder(order: any, query: BusinessQuery, itemsByOrder: Map<string, any[]>): boolean {

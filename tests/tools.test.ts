@@ -101,7 +101,7 @@ test("normal diagnosis report explains metric changes without fabricating an ale
   }, context);
 
   assert.match(report.content, /当前未触发既定预警阈值/);
-  assert.match(report.content, /成功支付金额增加/);
+  assert.match(report.content, /成功支付金额减少/);
   assert.equal(report.content.includes("风险提示"), false);
 });
 
@@ -116,7 +116,7 @@ test("refund contribution report answers the product ranking even without an ano
     diagnosis_id: diagnosis.diagnosis_id,
   }, context);
 
-  assert.match(report.content, /退款增长最多的商品是“数据分析课程”/);
+  assert.match(report.content, /退款增长最多的商品是“年度会员”/);
   assert.match(report.content, /变化来源分析/);
   assert.doesNotMatch(report.content, /当前未发现符合预警规则的明显异常/);
 });

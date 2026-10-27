@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 
 const DATA_DIR = join(process.cwd(), "data");
-const START = new Date(2026, 3, 1);
+const START_UTC = Date.UTC(2026, 3, 1);
 const DAYS = 183;
 
 let state = 20260930;
@@ -16,7 +16,7 @@ function pick<T>(items: T[]): T {
 }
 
 function dateAt(offset: number): string {
-  const date = new Date(Date.UTC(START.getFullYear(), START.getMonth(), START.getDate() + offset));
+  const date = new Date(START_UTC + offset * 86_400_000);
   return date.toISOString().slice(0, 10);
 }
 
@@ -65,7 +65,7 @@ function addOrder(day: number, channel: string, product = pick(products), custom
   const orderDate = dateAt(day);
   const region = pick(regions);
   const quantity = random() < 0.13 ? 2 : 1;
-  const amount = product.price_cents * quantity;
+  let orderAmount = product.price_cents * quantity;
   const failed = random() < 0.035;
   const cancelled = !failed && random() < 0.025;
   const paid = !failed && !cancelled;
@@ -73,15 +73,15 @@ function addOrder(day: number, channel: string, product = pick(products), custom
   let orderStatus = failed ? "payment_failed" : cancelled ? "cancelled" : "paid";
 
   orders.push({ order_id: orderId, customer_id: customer.customer_id, created_at: `${orderDate}T10:00:00Z`, channel, region, order_status: orderStatus });
-  items.push({ order_item_id: `I${String(orderNo).padStart(5, "0")}-1`, order_id: orderId, product_id: product.product_id, quantity, unit_price_cents: product.price_cents, line_amount_cents: amount });
+  items.push({ order_item_id: `I${String(orderNo).padStart(5, "0")}-1`, order_id: orderId, product_id: product.product_id, quantity, unit_price_cents: product.price_cents, line_amount_cents: orderAmount });
   // A small share of baskets contains two products, exercising allocation rules.
   if (paid && random() < 0.08) {
     const extra = pick(products.filter((candidate) => candidate.product_id !== product.product_id));
     const extraAmount = extra.price_cents;
     items.push({ order_item_id: `I${String(orderNo).padStart(5, "0")}-2`, order_id: orderId, product_id: extra.product_id, quantity: 1, unit_price_cents: extra.price_cents, line_amount_cents: extraAmount });
-    payments[payments.length - 1]!.amount_cents = amount + extraAmount;
+    orderAmount += extraAmount;
   }
-  payments.push({ payment_id: paymentId || `PAYFAIL${String(orderNo).padStart(5, "0")}`, order_id: orderId, payment_status: paid ? "success" : "failed", amount_cents: amount, succeeded_at: paid ? `${orderDate}T10:05:00Z` : "" });
+  payments.push({ payment_id: paymentId || `PAYFAIL${String(orderNo).padStart(5, "0")}`, order_id: orderId, payment_status: paid ? "success" : "failed", amount_cents: orderAmount, succeeded_at: paid ? `${orderDate}T10:05:00Z` : "" });
 
   if (!paid) return;
 
@@ -90,13 +90,14 @@ function addOrder(day: number, channel: string, product = pick(products), custom
   const normalRefund = !plantedRefund && random() < 0.045;
   if (!plantedRefund && !normalRefund) return;
 
-  const partial = random() < 0.38 && amount >= 19900;
-  const firstAmount = partial ? Math.floor(amount * 0.45) : amount;
+  const partial = random() < 0.38 && orderAmount >= 19900;
+  const firstAmount = partial ? Math.floor(orderAmount * 0.45) : orderAmount;
   refunds.push({ refund_id: `REF${String(++refundNo).padStart(6, "0")}`, payment_id: paymentId, order_id: orderId, refund_status: "success", refund_amount_cents: firstAmount, completed_at: `${dateAt(Math.min(day + 1, DAYS - 1))}T12:00:00Z`, refund_reason: plantedRefund ? "课程内容与预期不符" : pick(refundReasons) });
-  if (partial && random() < 0.32) {
-    refunds.push({ refund_id: `REF${String(++refundNo).padStart(6, "0")}`, payment_id: paymentId, order_id: orderId, refund_status: "success", refund_amount_cents: amount - firstAmount, completed_at: `${dateAt(Math.min(day + 2, DAYS - 1))}T12:00:00Z`, refund_reason: plantedRefund ? "课程内容与预期不符" : pick(refundReasons) });
+  const completesRefund = partial && random() < 0.32;
+  if (completesRefund) {
+    refunds.push({ refund_id: `REF${String(++refundNo).padStart(6, "0")}`, payment_id: paymentId, order_id: orderId, refund_status: "success", refund_amount_cents: orderAmount - firstAmount, completed_at: `${dateAt(Math.min(day + 2, DAYS - 1))}T12:00:00Z`, refund_reason: plantedRefund ? "课程内容与预期不符" : pick(refundReasons) });
   }
-  orderStatus = partial ? "partially_refunded" : "refunded";
+  orderStatus = partial && !completesRefund ? "partially_refunded" : "refunded";
   orders[orders.length - 1]!.order_status = orderStatus;
 }
 
