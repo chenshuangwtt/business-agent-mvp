@@ -1,5 +1,5 @@
 import { calculateMetricSnapshot, previousPeriod } from "./metrics.js";
-import { allocateCents } from "./allocation.js";
+import { allocateEventByProduct } from "./allocation.js";
 import type { AnalysisDimension, BusinessDataModel, BusinessQuery, DimensionContribution } from "./types.js";
 
 export type ContributionMetric = "refund" | "payment";
@@ -34,17 +34,17 @@ function aggregate(data: BusinessDataModel, query: BusinessQuery, metric: Contri
   for (const event of events) {
     const order = orders.get(event.order_id);
     if (!order || !matches(order, items.get(event.order_id) || [], query)) continue;
-    if (dimension === "refund_reason") add(result, event.reason || "未提供", event.amount);
-    else if (dimension === "channel") add(result, order.channel, event.amount);
-    else if (dimension === "region") add(result, order.region, event.amount);
+    const orderItems = items.get(event.order_id) || [];
+    const productAllocations = allocateEventByProduct(event.amount, orderItems);
+    const scopedAmount = query.product_id ? productAllocations.get(query.product_id) || 0 : event.amount;
+    if (dimension === "refund_reason") add(result, event.reason || "未提供", scopedAmount);
+    else if (dimension === "channel") add(result, order.channel, scopedAmount);
+    else if (dimension === "region") add(result, order.region, scopedAmount);
     else {
-      const orderItems = items.get(event.order_id) || [];
-      const allocations = allocateCents(event.amount, orderItems.map((item) => ({
-        key: products.get(item.product_id)?.product_name || item.product_id,
-        weight: item.line_amount_cents,
-      })));
-      if (!allocations.size) add(result, "未关联商品", event.amount);
-      for (const [key, amount] of allocations) add(result, key, amount);
+      if (!productAllocations.size) add(result, "未关联商品", scopedAmount);
+      for (const [productId, amount] of productAllocations) {
+        if (!query.product_id || productId === query.product_id) add(result, products.get(productId)?.product_name || productId, amount);
+      }
     }
   }
   return result;

@@ -1,43 +1,97 @@
 import { z } from "zod";
+import { calculateContributions } from "../business/contribution.js";
+import { previousPeriod } from "../business/metrics.js";
 import { getDataset } from "../business/datasetStore.js";
-import { allocateCents } from "../business/allocation.js";
+import { getBusinessDiagnosisAnomaly } from "./diagnoseBusiness.js";
 import { getDiagnosisAnomaly } from "./detectAnomalies.js";
 import type { AgentTool, ToolContext } from "../agent/types.js";
 
 const InputSchema = z.object({ dataset_id: z.string(), anomaly_id: z.string() });
+
 export const drillDownAnomalyTool: AgentTool = {
   name: "drill_down_anomaly",
-  description: "对已识别异常做维度拆分，返回产品、渠道、地区或退款原因的贡献，不返回订单明细。",
+  description: "按异常类型使用对应的支付或退款事件做周期贡献拆分，不返回订单明细。",
   riskLevel: "low",
   requiresApproval: false,
   inputSchema: InputSchema,
   execute: async (args, context: ToolContext) => {
     const { dataset_id, anomaly_id } = InputSchema.parse(args);
     const dataset = getDataset(dataset_id);
-    const anomaly = getDiagnosisAnomaly(anomaly_id);
-    if (!anomaly) throw Object.assign(new Error("anomaly_id 无效或已过期"), { code: "INVALID_ARGS" });
-    const orders = new Map(dataset.data.orders.map((order) => [order.order_id, order]));
-    const products = new Map(dataset.data.products.map((product) => [product.product_id, product]));
-    const items = new Map<string, typeof dataset.data.orderItems>();
-    for (const item of dataset.data.orderItems) items.set(item.order_id, [...(items.get(item.order_id) || []), item]);
-    const refunds = dataset.data.refunds.filter((refund) => refund.refund_status === "success" && refund.completed_at.slice(0, 10) >= dataset.query.start_date && refund.completed_at.slice(0, 10) <= dataset.query.end_date);
-    const groups = new Map<string, number>();
-    const dimension = anomaly.type === "channel_sales_decline" ? "channel" : anomaly.type === "high_frequency_ordering" ? "customer" : "product";
-    for (const refund of refunds) {
-      const order = orders.get(refund.order_id); if (!order) continue;
-      if (dimension === "product") {
-        const allocations = allocateCents(refund.refund_amount_cents, (items.get(refund.order_id) || []).map((item) => ({
-          key: products.get(item.product_id)?.product_name || item.product_id,
-          weight: item.line_amount_cents,
-        })));
-        for (const [key, amount] of allocations) groups.set(key, (groups.get(key) || 0) + amount);
-      } else {
-        const key = dimension === "channel" ? order.channel : order.customer_id;
-        groups.set(key, (groups.get(key) || 0) + refund.refund_amount_cents);
-      }
+    const anomaly = getDiagnosisAnomaly(anomaly_id) || getBusinessDiagnosisAnomaly(anomaly_id);
+    if (!anomaly || anomaly.dataset_id !== dataset_id) throw Object.assign(new Error("anomaly_id 与数据集不匹配或已过期"), { code: "INVALID_ARGS" });
+
+    const period = { current: dataset.query, previous: previousPeriod(dataset.query) };
+    if (anomaly.type === "channel_sales_decline") {
+      const channel = anomaly.scope?.channel;
+      if (!channel) return emptyResult(dataset_id, anomaly_id, "缺少渠道异常范围", period);
+      const query = { ...dataset.query, channel };
+      const contributions = calculateContributions(dataset.data, query, "payment", "product").slice(0, 10);
+      context.logger(`下钻渠道支付异常: ${anomaly_id}`);
+      return {
+        dataset_id,
+        anomaly_id,
+        metric: "successful_payment_amount_cents",
+        dimension: "product",
+        scope: { channel },
+        period,
+        contributions,
+        note: "仅比较该渠道在当前与上一等长周期内的成功支付金额，商品金额按订单明细分摊。",
+      };
     }
-    const contributions = [...groups.entries()].map(([dimension_value, refund_amount_cents]) => ({ dimension, dimension_value, refund_amount_cents })).sort((a, b) => b.refund_amount_cents - a.refund_amount_cents).slice(0, 10);
-    context.logger(`下钻异常: ${anomaly_id}`);
-    return { dataset_id, anomaly_id, dimension, contributions, note: "贡献按成功退款金额聚合；高频下单需要结合订单证据查看。" };
+
+    if (anomaly.type === "refund_ratio_increase") {
+      const contributions = calculateContributions(dataset.data, dataset.query, "refund", "product").slice(0, 10);
+      context.logger(`下钻退款异常: ${anomaly_id}`);
+      return {
+        dataset_id,
+        anomaly_id,
+        metric: "successful_refund_amount_cents",
+        dimension: "product",
+        period,
+        contributions,
+        note: "仅统计当前与上一等长周期内完成的成功退款，商品金额按订单明细分摊。",
+      };
+    }
+
+    if (anomaly.type === "product_sales_change") {
+      const product_id = anomaly.scope?.product_id;
+      if (!product_id) return emptyResult(dataset_id, anomaly_id, "缺少商品异常范围", period);
+      const contributions = calculateContributions(dataset.data, { ...dataset.query, product_id }, "payment", "product").slice(0, 10);
+      context.logger(`下钻商品支付异常: ${anomaly_id}`);
+      return {
+        dataset_id,
+        anomaly_id,
+        metric: "successful_payment_amount_cents",
+        dimension: "product",
+        scope: { product_id },
+        period,
+        contributions,
+        note: "商品异常按成功支付时间比较，金额仅归属到目标商品。",
+      };
+    }
+
+    const customer_id = anomaly.scope?.customer_id;
+    const date = anomaly.scope?.date;
+    const orders = dataset.data.orders
+      .filter((order) => order.customer_id === customer_id && (!date || order.created_at.slice(0, 10) === date))
+      .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.order_id.localeCompare(right.order_id))
+      .slice(0, 10)
+      .map((order) => ({ order_id: order.order_id, created_at: order.created_at, customer_id: order.customer_id }));
+    context.logger(`下钻高频订单异常: ${anomaly_id}`);
+    return {
+      dataset_id,
+      anomaly_id,
+      metric: "created_order_count",
+      dimension: "customer",
+      scope: { customer_id, date },
+      period,
+      contributions: [{ dimension: "customer", dimension_value: customer_id || "未提供", current_order_count: orders.length }],
+      records: orders,
+      note: "高频下单仅返回目标客户在异常日期的实际订单记录。",
+    };
   },
 };
+
+function emptyResult(dataset_id: string, anomaly_id: string, reason: string, period: unknown) {
+  return { dataset_id, anomaly_id, contributions: [], reason, period };
+}

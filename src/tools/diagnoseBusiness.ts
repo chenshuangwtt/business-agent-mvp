@@ -24,3 +24,11 @@ export const diagnoseBusinessTool: AgentTool = {
 };
 
 export function getDiagnosisState(diagnosisId: string): DiagnosisState | undefined { return states.get(diagnosisId); }
+
+export function getBusinessDiagnosisAnomaly(anomalyId: string) {
+  for (const state of states.values()) {
+    const anomaly = state.anomalies.find((item) => item.anomaly_id === anomalyId);
+    if (anomaly) return anomaly;
+  }
+  return undefined;
+}

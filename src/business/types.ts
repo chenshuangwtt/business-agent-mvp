@@ -121,6 +121,7 @@ export interface PeriodComparison {
 
 export interface DiagnosisAnomaly {
   anomaly_id: string;
+  dataset_id: string;
   type: "refund_ratio_increase" | "channel_sales_decline" | "product_sales_change" | "high_frequency_ordering";
   severity: "low" | "medium" | "high";
   title: string;
@@ -128,6 +129,7 @@ export interface DiagnosisAnomaly {
   facts: string[];
   comparison_id: string;
   dimensions: Array<"product" | "channel" | "region" | "refund_reason" | "customer">;
+  scope?: { channel?: string; product_id?: string; customer_id?: string; date?: string };
 }
 
 export type DiagnosisGoal = "refund_increase" | "refund_contribution" | "channel_decline" | "product_change" | "behavior_risk" | "general_health";

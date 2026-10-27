@@ -27,6 +27,7 @@ function crossPeriodData(): BusinessDataModel {
     ],
     refunds: [
       { refund_id: "REF1", payment_id: "PAY1", order_id: "O1", refund_status: "success", refund_amount_cents: 101, completed_at: "2026-09-25T12:00:00Z", refund_reason: "重复购买" },
+      { refund_id: "REF2", payment_id: "PAY1", order_id: "O1", refund_status: "success", refund_amount_cents: 100, completed_at: "2026-09-26T12:00:00Z", refund_reason: "购买后改变计划" },
     ],
     products: [
       { product_id: "P1", product_name: "商品A", category: "分类A", price_cents: 100 },
@@ -68,16 +69,38 @@ test("refunds use completion date and allocations preserve category and product 
   const snapshot = calculateMetricSnapshot(data, query);
 
   assert.equal(snapshot.successful_payment_amount_cents, 301);
-  assert.equal(snapshot.successful_refund_amount_cents, 101);
+  assert.equal(snapshot.successful_refund_amount_cents, 201);
   assert.equal(sumDimension(snapshot, "successful_payment_amount_cents"), 301);
-  assert.equal(sumDimension(snapshot, "successful_refund_amount_cents"), 101);
-  assert.deepEqual(Object.values(snapshot.by_category).map((item) => item.successful_refund_amount_cents).sort((a, b) => a - b), [34, 67]);
+  assert.equal(sumDimension(snapshot, "successful_refund_amount_cents"), 201);
+  assert.deepEqual(Object.values(snapshot.by_category).map((item) => item.successful_refund_amount_cents).sort((a, b) => a - b), [67, 134]);
 
   const paymentContributions = calculateContributions(data, query, "payment", "product");
   const refundContributions = calculateContributions(data, query, "refund", "product");
   assert.equal(paymentContributions.reduce((sum, item) => sum + item.current_amount_cents, 0), 301);
-  assert.equal(refundContributions.reduce((sum, item) => sum + item.current_amount_cents, 0), 101);
-  assert.deepEqual(refundContributions.map((item) => item.current_amount_cents).sort((a, b) => a - b), [34, 67]);
+  assert.equal(refundContributions.reduce((sum, item) => sum + item.current_amount_cents, 0), 201);
+  assert.deepEqual(refundContributions.map((item) => item.current_amount_cents).sort((a, b) => a - b), [67, 134]);
+});
+
+test("product filters keep containing-order counts but allocate payment and refund cents to the product", () => {
+  const data = crossPeriodData();
+  const snapshot = calculateMetricSnapshot(data, {
+    start_date: "2026-09-24",
+    end_date: "2026-09-30",
+    product_id: "P1",
+    channel: "官网",
+    region: "华东",
+  });
+
+  assert.equal(snapshot.successful_payment_order_count, 1);
+  assert.equal(snapshot.successful_payment_amount_cents, 101);
+  assert.equal(snapshot.successful_refund_amount_cents, 67);
+  assert.equal(snapshot.by_channel["官网"]?.successful_payment_amount_cents, 101);
+  assert.equal(snapshot.by_region["华东"]?.successful_refund_amount_cents, 67);
+  assert.equal(sumDimension(snapshot, "successful_payment_amount_cents"), 101);
+  assert.equal(sumDimension(snapshot, "successful_refund_amount_cents"), 67);
+
+  const refunds = calculateContributions(data, { start_date: "2026-09-24", end_date: "2026-09-30", product_id: "P1" }, "refund", "product");
+  assert.deepEqual(refunds.map((item) => [item.value, item.current_amount_cents]), [["商品A", 67]]);
 });
 
 test("generated category metrics and product contributions conserve all cents", () => {

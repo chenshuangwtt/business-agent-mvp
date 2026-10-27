@@ -3,6 +3,11 @@ export interface AllocationWeight {
   weight: number;
 }
 
+export interface AllocatableOrderItem {
+  product_id: string;
+  line_amount_cents: number;
+}
+
 /**
  * Allocates integer cents proportionally while preserving the original total.
  */
@@ -27,4 +32,8 @@ export function allocateCents(amountCents: number, weights: AllocationWeight[]):
   for (let index = 0; index < remaining; index++) portions[index % portions.length]!.cents++;
 
   return new Map(portions.map((portion) => [portion.key, portion.cents * sign]));
+}
+
+export function allocateEventByProduct(amountCents: number, items: AllocatableOrderItem[]): Map<string, number> {
+  return allocateCents(amountCents, items.map((item) => ({ key: item.product_id, weight: item.line_amount_cents })));
 }

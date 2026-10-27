@@ -125,7 +125,7 @@ function investigateChannelDecline(state: DiagnosisState, data: BusinessDataMode
     && declined.previous_amount_cents > 0
     && declined.delta_amount_cents / declined.previous_amount_cents <= -CHANNEL_DECLINE_THRESHOLD;
   if (exceedsThreshold) {
-    const anomaly = makeAnomaly("channel_sales_decline", "medium", state, `${declined.value} 成功支付金额较上一周期下降 ${percent(Math.abs(declined.delta_amount_cents / declined.previous_amount_cents))}`);
+    const anomaly = makeAnomaly("channel_sales_decline", "medium", state, `${declined.value} 成功支付金额较上一周期下降 ${percent(Math.abs(declined.delta_amount_cents / declined.previous_amount_cents))}`, { channel: declined.value });
     state.anomalies.push(anomaly); state.confirmed_facts.push(anomaly.trigger);
   } else {
     state.confirmed_facts.push(`${declined.value} 的成功支付金额发生变化，但未达到当前渠道预警阈值。`);
@@ -149,7 +149,7 @@ function investigateProductChange(state: DiagnosisState, data: BusinessDataModel
     return;
   }
   const direction = largest.delta_amount_cents >= 0 ? "增加" : "减少";
-  const item = makeAnomaly("product_sales_change", "medium", state, `${largest.value} 成功支付金额较上一周期${direction} ${Math.abs(largest.delta_amount_cents)} 分`);
+  const item = makeAnomaly("product_sales_change", "medium", state, `${largest.value} 成功支付金额较上一周期${direction} ${Math.abs(largest.delta_amount_cents)} 分`, { product_id: productIdByName(data, largest.value) });
   state.anomalies.push(item); state.confirmed_facts.push(item.trigger); state.contributions.push(...products);
   state.analyzed_dimensions.push("product"); state.depth++;
   step(state, "analyze_contribution", "用户关注商品表现，按支付金额绝对变化选出最大商品。", "product", `${largest.value} ${direction} ${Math.abs(largest.delta_amount_cents)} 分`);
@@ -165,7 +165,7 @@ function investigateBehavior(state: DiagnosisState, data: BusinessDataModel) {
   const signal = [...counts.entries()].find(([, count]) => count >= 7);
   if (!signal) return;
   const [key, count] = signal; const [customer, date] = key.split("|");
-  const item = makeAnomaly("high_frequency_ordering", "medium", state, `${customer} 在 ${date} 创建 ${count} 笔订单`);
+  const item = makeAnomaly("high_frequency_ordering", "medium", state, `${customer} 在 ${date} 创建 ${count} 笔订单`, { customer_id: customer, date });
   state.anomalies.push(item); state.confirmed_facts.push(`${item.trigger}，属于待复核行为信号。`);
   step(state, "get_anomaly_evidence", "检测到高频行为，仅记录可复核事实，不继续推断主观意图。", "customer", item.trigger);
 }
@@ -179,7 +179,7 @@ function detectGoal(question: string): DiagnosisGoal {
   return "general_health";
 }
 function step(state: DiagnosisState, action: string, reason: string, dimension: any, result: string) { state.steps.push({ step: state.steps.length + 1, action, reason, dimension, result_summary: result }); }
-function makeAnomaly(type: DiagnosisAnomaly["type"], severity: DiagnosisAnomaly["severity"], state: DiagnosisState, trigger: string): DiagnosisAnomaly { return { anomaly_id: `${state.diagnosis_id}-${type}`, type, severity, title: type === "refund_ratio_increase" ? "退款异常上升" : type === "channel_sales_decline" ? "渠道支付金额下降" : type === "product_sales_change" ? "商品支付金额变化" : "高频购买信号", trigger, facts: [trigger], comparison_id: state.comparison.comparison_id, dimensions: type === "refund_ratio_increase" ? ["product", "channel", "refund_reason"] : type === "channel_sales_decline" ? ["channel", "product"] : type === "product_sales_change" ? ["product"] : ["customer"] }; }
+function makeAnomaly(type: DiagnosisAnomaly["type"], severity: DiagnosisAnomaly["severity"], state: DiagnosisState, trigger: string, scope?: DiagnosisAnomaly["scope"]): DiagnosisAnomaly { return { anomaly_id: `${state.diagnosis_id}-${type}`, dataset_id: state.dataset_id, type, severity, title: type === "refund_ratio_increase" ? "退款异常上升" : type === "channel_sales_decline" ? "渠道支付金额下降" : type === "product_sales_change" ? "商品支付金额变化" : "高频购买信号", trigger, facts: [trigger], comparison_id: state.comparison.comparison_id, dimensions: type === "refund_ratio_increase" ? ["product", "channel", "refund_reason"] : type === "channel_sales_decline" ? ["channel", "product"] : type === "product_sales_change" ? ["product"] : ["customer"], scope }; }
 function productIdByName(data: BusinessDataModel, name: string) { return data.products.find((product) => product.product_name === name)?.product_id; }
 function largestContribution(items: ReturnType<typeof calculateContributions>, preference: "positive" | "negative") {
   const preferred = items.filter((item) => preference === "positive" ? item.delta_amount_cents > 0 : item.delta_amount_cents < 0);

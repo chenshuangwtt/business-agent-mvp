@@ -6,7 +6,7 @@ import type {
   MetricSnapshot,
   PeriodComparison,
 } from "./types.js";
-import { allocateCents } from "./allocation.js";
+import { allocateCents, allocateEventByProduct } from "./allocation.js";
 
 type Dimension = "channel" | "region" | "category";
 
@@ -33,8 +33,8 @@ export function calculateMetricSnapshot(data: BusinessDataModel, query: Business
       && inRange(refund.completed_at, query)
   );
 
-  const successfulPaymentAmount = sum(successfulPayments.map((payment) => payment.amount_cents));
-  const successfulRefundAmount = sum(successfulRefunds.map((refund) => refund.refund_amount_cents));
+  const successfulPaymentAmount = sum(successfulPayments.map((payment) => scopedEventAmount(payment.amount_cents, payment.order_id, query.product_id, itemsByOrder)));
+  const successfulRefundAmount = sum(successfulRefunds.map((refund) => scopedEventAmount(refund.refund_amount_cents, refund.order_id, query.product_id, itemsByOrder)));
   const paymentOrderCount = new Set(successfulPayments.map((payment) => payment.order_id)).size;
 
   return {
@@ -46,9 +46,9 @@ export function calculateMetricSnapshot(data: BusinessDataModel, query: Business
     net_cash_inflow_cents: successfulPaymentAmount - successfulRefundAmount,
     average_paid_order_amount_cents: paymentOrderCount ? Math.round(successfulPaymentAmount / paymentOrderCount) : null,
     refund_to_payment_ratio: successfulPaymentAmount ? successfulRefundAmount / successfulPaymentAmount : null,
-    by_channel: dimensionMetrics("channel", successfulPayments, successfulRefunds, orderById, itemsByOrder, products),
-    by_region: dimensionMetrics("region", successfulPayments, successfulRefunds, orderById, itemsByOrder, products),
-    by_category: dimensionMetrics("category", successfulPayments, successfulRefunds, orderById, itemsByOrder, products),
+    by_channel: dimensionMetrics("channel", successfulPayments, successfulRefunds, orderById, itemsByOrder, products, query.product_id),
+    by_region: dimensionMetrics("region", successfulPayments, successfulRefunds, orderById, itemsByOrder, products, query.product_id),
+    by_category: dimensionMetrics("category", successfulPayments, successfulRefunds, orderById, itemsByOrder, products, query.product_id),
   };
 }
 
@@ -99,7 +99,8 @@ function dimensionMetrics(
   refunds: BusinessDataModel["refunds"],
   orders: Map<string, BusinessDataModel["orders"][number]>,
   itemsByOrder: Map<string, BusinessDataModel["orderItems"]>,
-  products: Map<string, BusinessDataModel["products"][number]>
+  products: Map<string, BusinessDataModel["products"][number]>,
+  productId?: string
 ): Record<string, DimensionMetric> {
   const result: Record<string, DimensionMetric> = {};
   const add = (key: string, field: keyof DimensionMetric, cents: number) => {
@@ -108,29 +109,38 @@ function dimensionMetrics(
     result[key].net_cash_inflow_cents = result[key].successful_payment_amount_cents - result[key].successful_refund_amount_cents;
   };
   for (const payment of payments) {
-    for (const [key, cents] of allocationFor(dimension, payment.order_id, payment.amount_cents, orders, itemsByOrder, products)) {
+    const amountCents = scopedEventAmount(payment.amount_cents, payment.order_id, productId, itemsByOrder);
+    for (const [key, cents] of allocationFor(dimension, payment.order_id, amountCents, orders, itemsByOrder, products, productId)) {
       add(key, "successful_payment_amount_cents", cents);
     }
   }
   for (const refund of refunds) {
-    for (const [key, cents] of allocationFor(dimension, refund.order_id, refund.refund_amount_cents, orders, itemsByOrder, products)) {
+    const amountCents = scopedEventAmount(refund.refund_amount_cents, refund.order_id, productId, itemsByOrder);
+    for (const [key, cents] of allocationFor(dimension, refund.order_id, amountCents, orders, itemsByOrder, products, productId)) {
       add(key, "successful_refund_amount_cents", cents);
     }
   }
   return result;
 }
 
-function allocationFor(dimension: Dimension, orderId: string, amountCents: number, orders: Map<string, any>, itemsByOrder: Map<string, any[]>, products: Map<string, any>): Array<[string, number]> {
+function allocationFor(dimension: Dimension, orderId: string, amountCents: number, orders: Map<string, any>, itemsByOrder: Map<string, any[]>, products: Map<string, any>, productId?: string): Array<[string, number]> {
   const order = orders.get(orderId);
   if (!order) return [];
   if (dimension === "channel") return [[order.channel, amountCents]];
   if (dimension === "region") return [[order.region, amountCents]];
-  const weights = (itemsByOrder.get(orderId) || []).map((item) => ({
+  const weights = (itemsByOrder.get(orderId) || [])
+    .filter((item) => !productId || item.product_id === productId)
+    .map((item) => ({
     key: products.get(item.product_id)?.category || "未分类",
     weight: item.line_amount_cents,
-  }));
+    }));
   const allocations = allocateCents(amountCents, weights);
   return allocations.size ? [...allocations] : [["未分类", amountCents]];
+}
+
+function scopedEventAmount(amountCents: number, orderId: string, productId: string | undefined, itemsByOrder: Map<string, BusinessDataModel["orderItems"]>): number {
+  if (!productId) return amountCents;
+  return allocateEventByProduct(amountCents, itemsByOrder.get(orderId) || []).get(productId) || 0;
 }
 
 function matchesOrder(order: any, query: BusinessQuery, itemsByOrder: Map<string, any[]>): boolean {
