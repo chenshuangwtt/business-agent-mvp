@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "dev:ui": "cd frontend && pnpm dev",
+    "generate:data": "tsx scripts/generateDemoData.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
     "build:ui": "cd frontend && pnpm build",

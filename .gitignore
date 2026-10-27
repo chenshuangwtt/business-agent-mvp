@@ -3,6 +3,9 @@ dist/
 frontend/dist/
 coverage/
 
+# Local IDE settings
+.idea/
+
 .env
 .env.*
 !.env.example

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  Activity,
   Bot,
   ChevronLeft,
   ChevronRight,
@@ -26,7 +25,8 @@ const statusLabel = computed(() => {
   return health.value.status === 'ok' ? '服务在线' : '服务异常'
 })
 
-const llmLabel = computed(() => (health.value?.llmAvailable ? 'LLM 在线' : 'Fallback 模式'))
+const dataEnvironment = computed(() => health.value?.dataEnvironment || '数据环境加载中')
+const dataCoverage = computed(() => health.value?.dataCoverage || '')
 
 function openTrace(traceId: string) {
   activeTraceId.value = traceId
@@ -47,7 +47,7 @@ onMounted(async () => {
     <aside
       class="app-sidebar"
       :class="sidebarOpen ? 'w-[320px]' : 'w-0 border-r-0'"
-      aria-label="Agent 能力侧栏"
+      aria-label="经营分析侧栏"
     >
       <div class="sidebar-inner">
         <div class="brand-block">
@@ -55,8 +55,8 @@ onMounted(async () => {
             <Bot :size="20" />
           </div>
           <div class="min-w-0">
-            <div class="brand-title">Business Agent</div>
-            <div class="brand-subtitle">经营分析工作台</div>
+            <div class="brand-title">经营诊断</div>
+            <div class="brand-subtitle">经营异常诊断</div>
           </div>
         </div>
 
@@ -69,14 +69,13 @@ onMounted(async () => {
             <span>{{ statusLabel }}</span>
           </div>
           <div class="status-meta">
-            <Activity :size="13" />
-            <span>{{ llmLabel }}</span>
+            <span>{{ dataEnvironment }}</span>
+            <span v-if="dataCoverage">· {{ dataCoverage }}</span>
           </div>
         </div>
 
         <div class="sidebar-section-head">
-          <span>Agent 能力</span>
-          <span class="section-pill">7 tools</span>
+          <span>分析范围</span>
         </div>
 
         <ToolsList />
@@ -97,7 +96,7 @@ onMounted(async () => {
           </button>
           <div>
             <div class="topbar-title">新对话</div>
-            <div class="topbar-subtitle">查询订单、计算指标、生成报告</div>
+            <div class="topbar-subtitle">分期对比、异常下钻、报告交付</div>
           </div>
         </div>
 

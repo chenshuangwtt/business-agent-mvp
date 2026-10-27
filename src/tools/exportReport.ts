@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { z } from "zod";
 import type { AgentTool, ToolContext } from "../agent/types.js";
+import { formatBusinessAnswer } from "../utils/markdown.js";
 
 const REPORTS_DIR = resolve(process.cwd(), "reports");
 
@@ -46,13 +47,14 @@ export const exportReportTool: AgentTool = {
       };
     }
 
-    writeFileSync(filePath, content, "utf-8");
+    const businessContent = formatBusinessAnswer(content);
+    writeFileSync(filePath, businessContent, "utf-8");
 
     return {
       success: true,
       filename,
       path: `reports/${filename}`,
-      size: content.length,
+      size: businessContent.length,
       message: `报告已导出到 reports/${filename}`,
     };
   },

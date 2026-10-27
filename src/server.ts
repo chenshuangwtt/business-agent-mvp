@@ -8,6 +8,8 @@ import { getTrace, listTraces } from "./trace/traceRecorder.js";
 import { logger } from "./utils/logger.js";
 import { getAvailableLLMConfigs, getLLMConfig } from "./llm/llmClient.js";
 import { getSkillInfos } from "./skills/skillRegistry.js";
+import { getTimeMode } from "./utils/timeMode.js";
+import { getBusinessDataCoverage } from "./business/businessRepository.js";
 
 const app: express.Express = express();
 app.use(express.json({ limit: "2mb" }));
@@ -101,6 +103,7 @@ app.get("/api/traces/:traceId", (req, res) => {
 app.get("/api/health", (_req, res) => {
   const llmConfig = getLLMConfig();
   const llmProfiles = getAvailableLLMConfigs();
+  const timeMode = getTimeMode();
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
@@ -113,6 +116,11 @@ app.get("/api/health", (_req, res) => {
       model: config.model,
     })),
     skills: getSkillInfos().length,
+    dataEnvironment: timeMode === "demo" ? "示例数据" : "生产数据",
+    dataCoverage: timeMode === "demo" ? (() => {
+      const coverage = getBusinessDataCoverage();
+      return `${coverage.startDate} 至 ${coverage.endDate}`;
+    })() : undefined,
   });
 });
 

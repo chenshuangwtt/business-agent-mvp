@@ -29,9 +29,13 @@ triggers:
 tools:
   - query_orders
   - calculate_metrics
-  - find_anomalies
+  - compare_period_metrics
+  - detect_anomalies
+  - diagnose_business
+  - drill_down_anomaly
+  - get_anomaly_evidence
   - search_business_rules
-  - generate_report
+  - generate_diagnosis_report
 
 workflow:
   - 确认查询时间范围和筛选条件

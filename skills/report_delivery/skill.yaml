@@ -29,9 +29,11 @@ triggers:
 tools:
   - query_orders
   - calculate_metrics
-  - find_anomalies
+  - compare_period_metrics
+  - detect_anomalies
+  - diagnose_business
   - search_business_rules
-  - generate_report
+  - generate_diagnosis_report
   - export_report
   - send_report_email
 

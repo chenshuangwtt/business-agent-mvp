@@ -1,12 +1,30 @@
 # business-agent-mvp
 
-> 多工具经营分析 Agent
+> 多工具经营异常诊断 Agent
 
-项目以订单经营分析为业务场景，提供订单查询、指标计算、异常识别、业务规则检索、报告生成、报告导出和邮件发送模拟。
+项目以订单、支付和退款事件为业务场景，提供分期指标、异常诊断、下钻证据、报告交付和审批模拟。
+
+## 启动项目
+
+完整运行说明见 [docs/RUNNING.md](docs/RUNNING.md)。本地开发使用两个终端：
+
+```powershell
+# 终端 1：安装依赖并启动后端
+pnpm install
+pnpm run dev
+
+# 终端 2：启动 Vue 前端
+pnpm --dir frontend run dev -- --host 0.0.0.0
+```
+
+打开 `http://localhost:5173`。后端健康检查为 `http://localhost:3001/api/health`。
+
+不配置 LLM Key 也可以运行：系统会使用本地确定性诊断流程，适合直接验证 demo 数据与 Trace。
 
 ## 项目亮点
 
-- 将经营分析拆成可验证的工具链：查询、计算、异常识别、规则检索和报告生成各自独立。
+- 查询只返回 `dataset_id` 和摘要，订单明细始终留在服务端。
+- 支付、退款和净现金流按独立事件计算，金额统一使用整数分。
 - 中高风险操作进入审批流程，导出文件和发送邮件不会直接执行。
 - 每次请求生成 Trace，前端可以查看 LLM 请求、工具调用、审批和错误信息。
 - LLM 不可用或超时时使用本地报告流程，基础演示不依赖外部服务。
@@ -17,9 +35,9 @@
 | 能力 | 实现方式 | 状态 |
 |---|---|---|
 | 多工具编排 | 工具注册表 + Agent Loop | 已完成 |
-| 结构化数据查询 | CSV + 确定性代码 | 已完成 |
-| 指标计算 | `calculate_metrics` 确定性计算 | 已完成 |
-| 异常识别 | `find_anomalies` 规则识别 | 已完成 |
+| 结构化数据查询 | 订单、明细、支付、退款等多 CSV + 数据集引用 | 已完成 |
+| 指标计算 | `calculate_metrics` + `compare_period_metrics` | 已完成 |
+| 异常识别 | `detect_anomalies` + 下钻/证据工具 | 已完成 |
 | RAG 检索 | Markdown + 轻量关键词检索 | 已完成 |
 | 审批机制 | 中高风险工具暂停等待用户确认 | 已完成 |
 | Trace 可观测性 | API + 前端执行链路抽屉 | 已完成 |
@@ -28,7 +46,7 @@
 | 工具并发 | 信号量控制 + 结果保序 | 已完成 |
 | 测试 | Node test 覆盖关键工具逻辑 | 已接入 |
 
-Demo 数据窗口为 `2026-05-25` 到 `2026-06-03`，共 200 笔订单。无 LLM fallback 模式使用该数据窗口。
+Demo 数据覆盖 `2026-04-01` 到 `2026-09-30`，共约 5,600 笔订单。数据固定生成，可复现退款上升、小程序下降、商品变化和高频购买信号。
 
 ## 时间模式
 
@@ -40,7 +58,7 @@ TIME_MODE=demo
 
 | 模式 | 相对时间处理 | 适用场景 |
 |---|---|---|
-| `demo` | “本周”“本月”“今天”“最近”等优先映射到固定 demo 数据窗口 `2026-05-25 至 2026-06-03` | 本地演示、固定样例数据、截图录制 |
+| `demo` | 以 `DEMO_REFERENCE_DATE` 解析“本周”“上周”“今天”“最近”等相对时间 | 本地演示、固定样例数据、截图录制 |
 | `production` | 按真实当前日期解析自然周、自然月、当天和最近 N 天 | 接真实数据库、线上服务、真实经营分析 |
 
 示例：真实当前日期为 `2026-06-05` 时，`TIME_MODE=production` 会解析为：
@@ -52,7 +70,36 @@ TIME_MODE=demo
 | 本月 | `2026-06-01 至 2026-06-30` |
 | 最近 7 天 | `2026-05-30 至 2026-06-05` |
 
-时间边界由 Agent 的时间解析层确定，数据库只接收明确的 `start_date` 和 `end_date` 执行查询。`production` 模式查询不到数据时不会自动回退到 demo 数据窗口，报告会说明当前查询周期没有匹配订单。
+默认 `DEMO_REFERENCE_DATE=2026-09-30`。demo 的“本周”“上周”和“最近 7 天”按参考日期生成等长七天窗口，分别为 `2026-09-24 至 2026-09-30`、`2026-09-17 至 2026-09-23`，避免演示数据在自然周中途结束造成不对等比较。支持最近 30 天、本月、上月、周环比、月环比和自定义日期范围。`production` 模式只按真实时间解析，不会回退到 demo 数据。
+
+## 数据与指标口径
+
+演示数据拆分为 `orders.csv`、`order_items.csv`、`payments.csv`、`refunds.csv`、`products.csv` 和 `customers.csv`。`pnpm run generate:data` 会用固定 seed 重新生成整套数据。
+
+| 指标 | 口径 |
+|---|---|
+| 创建订单数 | `orders.created_at` 位于查询区间的订单数 |
+| 成功支付订单数 | 有 `payment_status=success` 且 `succeeded_at` 位于区间的去重订单数 |
+| 成功支付金额 | 成功支付事件的 `amount_cents` 之和 |
+| 成功退款金额 | 成功退款事件的 `refund_amount_cents` 之和，按 `completed_at` 归属 |
+| 净现金流入 | 成功支付金额减成功退款金额 |
+| 平均支付客单价 | 成功支付金额除以成功支付订单数 |
+| 退款/支付比 | 成功退款金额除以成功支付金额 |
+
+所有金额字段均为整数分。当前周期与上一周期始终按相同天数比较；上一周期为零时变化率返回 `not_calculable`，不生成无意义的百分比。
+
+## 动态诊断
+
+`DiagnosisEngine` 使用服务端 `DiagnosisState` 保存问题、周期对比、已确认事实、异常、已分析维度、贡献、证据、诊断深度、不确定性和停止原因。它不是固定工具序列：先比较整体指标，再根据实际结果决定是否继续。
+
+| 触发结果 | 下一步 |
+|---|---|
+| 退款金额和退款率同时显著上升 | 商品退款增量 → 主要商品的渠道 → 退款原因 |
+| 某渠道相对自身上一周期显著下降 | 渠道支付金额 → 商品下降贡献 |
+| 高购买频率 | 记录客户与日期作为人工复核信号，不推断欺诈 |
+| 未达到阈值 | 结束诊断并说明未发现明显异常 |
+
+默认最大下钻深度为 3，可通过 `MAX_DIAGNOSIS_DEPTH` 调整。贡献金额使用支付或退款事件按订单明细金额比例分摊；不同维度的贡献不能跨维度直接相加。LLM 只负责路由和说明，金额、变化率、贡献和停止判断均由确定性代码完成。无 LLM 时，fallback 仍会运行同一套动态诊断并写入 `diagnosis_step` Trace。
 
 ## Skill System
 
@@ -62,16 +109,16 @@ Skill 是建立在 Tool Registry 和 Agent Loop 之上的能力包。Tool 负责
 
 | 层级 | 作用 | 示例 |
 |---|---|---|
-| Tool | 单个可调用能力，包含参数 schema、风险等级和执行函数 | `query_orders`、`generate_report`、`export_report` |
+| Tool | 单个可调用能力，包含参数 schema、风险等级和执行函数 | `query_orders`、`detect_anomalies`、`export_report` |
 | Skill | 面向业务场景的组合能力，声明触发词、可用工具、流程和输出格式 | `business_analysis`、`anomaly_investigation` |
 
 ### 内置 Skills
 
 | Skill | 名称 | 说明 | 工具范围 |
 |---|---|---|---|
-| `business_analysis` | 经营分析 | 常规订单经营分析、指标计算、异常识别和报告生成 | `query_orders`、`calculate_metrics`、`find_anomalies`、`search_business_rules`、`generate_report` |
-| `anomaly_investigation` | 异常排查 | 退款、大额订单、疑似刷单、渠道或地区波动排查 | `query_orders`、`calculate_metrics`、`find_anomalies`、`search_business_rules`、`generate_report` |
-| `report_delivery` | 报告交付 | 报告生成、导出和邮件发送模拟 | `query_orders`、`calculate_metrics`、`find_anomalies`、`search_business_rules`、`generate_report`、`export_report`、`send_report_email` |
+| `business_analysis` | 经营分析 | 指标计算、分期对比和诊断报告 | 查询、指标、对比、异常、报告 |
+| `anomaly_investigation` | 异常排查 | 退款、渠道变化和高频下单排查 | 查询、对比、异常、下钻、证据 |
+| `report_delivery` | 报告交付 | 诊断报告、导出和邮件发送模拟 | 诊断工具 + `export_report`、`send_report_email` |
 
 ### 执行流程
 
@@ -117,15 +164,14 @@ graph TB
     Agent --> LLM[LLM Provider]
     Agent --> Tools[工具注册表]
 
-    Tools --> T1[query_orders]
-    Tools --> T2[calculate_metrics]
-    Tools --> T3[find_anomalies]
-    Tools --> T4[search_business_rules]
-    Tools --> T5[generate_report]
-    Tools --> T6[export_report]
-    Tools --> T7[send_report_email]
+    Tools --> T1[query_orders / dataset_id]
+    Tools --> T2[calculate_metrics / compare_period_metrics]
+    Tools --> T3[detect_anomalies / drill_down]
+    Tools --> T4[get_anomaly_evidence]
+    Tools --> T5[diagnose_business / generate_diagnosis_report]
+    Tools --> T6[export_report / send_report_email]
 
-    T1 --> CSV[data/orders.csv]
+    T1 --> CSV[orders / items / payments / refunds CSV]
     T4 --> RAG[关键词 RAG 检索]
     T5 --> Template[data/report_template.md]
     T6 --> Reports[reports/]
@@ -133,6 +179,7 @@ graph TB
 
     Agent --> Approval[审批机制]
     Agent --> TraceStore[Trace Recorder]
+    T5 --> State[DiagnosisState / 动态下钻]
 
     subgraph 稳定性治理
         Timeout[超时]
@@ -283,11 +330,11 @@ curl http://localhost:3001/api/traces
 
 重点观察：
 
-- `query_orders` 查询 demo 订单数据。
-- `calculate_metrics` 计算 GMV、净销售额、退款率和客单价。
-- `find_anomalies` 识别大额订单、高退款和疑似刷单风险。
+- `query_orders` 创建服务端数据集并返回 `dataset_id`。
+- `calculate_metrics`、`compare_period_metrics` 计算本期与等长上一周期。
+- `detect_anomalies` 识别退款率上升、渠道支付金额下降和高频下单。
 - `search_business_rules` 检索经营分析规则。
-- `generate_report` 生成经营分析报告。
+- `generate_diagnosis_report` 生成诊断报告。
 - Trace 中可以看到完整工具链路。
 
 ### 场景 2：导出报告审批
@@ -333,7 +380,7 @@ curl http://localhost:3001/api/traces
 
 重点观察：
 
-- 系统仍可基于 CSV 数据生成本地模板报告。
+- 系统仍可基于 CSV 数据生成确定性诊断报告。
 - Trace 中出现 `fallback`。
 - 报告中说明这是 fallback 结果。
 
@@ -397,7 +444,7 @@ curl -X POST http://localhost:3001/api/approve `
 | 超时控制 | `withTimeout` 包裹工具执行 | `TOOL_TIMEOUT_MS=10000` |
 | LLM 超时 | 单轮 LLM 调用超时后进入 fallback | `LLM_TIMEOUT_MS=30000` |
 | 重试机制 | `withRetry` 对可重试错误重试 | `MAX_RETRY=2` |
-| 最大轮次 | Agent Loop 最多 6 轮工具调用 | `MAX_TOOL_ROUNDS=6` |
+| 最大轮次 | Agent Loop 最多 10 轮工具调用 | `MAX_TOOL_ROUNDS=10` |
 | 并发控制 | 信号量限制并发工具数量 | `MAX_CONCURRENT_TOOLS=3` |
 | 权限治理 | Critical 直接拒绝，中高风险审批 | 工具风险等级 |
 | 降级策略 | RAG 失败返回空结果，LLM 失败用模板 | 内置 |
@@ -480,13 +527,14 @@ curl -X POST http://localhost:3001/api/approve `
 
 ### 自动测试
 
-自动测试文件位于 `tests/tools.test.ts`，覆盖工具层关键风险点：
+自动测试覆盖 Skill 路由、时间解析和工具层关键风险点：
 
 | 覆盖点 | 验证内容 |
 |---|---|
-| `query_orders` | 日期范围校验、demo 数据读取 |
-| `calculate_metrics` | GMV、净销售额、退款率、客单价 |
-| `find_anomalies` | 大额订单、高退款日 |
+| 数据模型 | 外键关系、金额单位、订单明细金额一致性 |
+| `query_orders` | 日期范围校验、`dataset_id`、明细不出服务端 |
+| 指标与对比 | 整数分、等长上一周期、不可计算变化率 |
+| `detect_anomalies` | 退款率上升、高频下单等固定演示信号 |
 | `export_report` | 只能写入 `reports/`，防路径穿越 |
 | `toolRegistry` | 默认参数不误标为 required |
 

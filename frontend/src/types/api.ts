@@ -6,12 +6,70 @@ export interface AgentResponse {
   traceId: string
   sessionId: string
   answer?: string
+  businessData?: BusinessPresentation
   approvalId?: string
   toolName?: string
   riskLevel?: RiskLevel
   arguments?: any
   message?: string
   code?: string
+}
+
+export type BusinessMetricUnit = 'CNY' | 'percent' | 'count'
+export type BusinessMetricDirection = 'up' | 'down' | 'stable' | 'unknown'
+export type BusinessMetricStatus = 'favorable' | 'unfavorable' | 'warning' | 'neutral' | 'unknown'
+
+export interface BusinessMetric {
+  id: string
+  label: string
+  value: number | null
+  unit: BusinessMetricUnit
+  previousValue?: number | null
+  changeValue?: number | null
+  changeRate?: number | null
+  percentagePointChange?: number | null
+  direction: BusinessMetricDirection
+  status: BusinessMetricStatus
+  description?: string
+}
+
+export interface BusinessHighlight {
+  title: string
+  content: string
+  severity: 'low' | 'medium' | 'high'
+  status: BusinessMetricStatus
+}
+
+export interface BusinessBreakdownRow {
+  label: string
+  currentValue: number
+  previousValue: number
+  changeValue: number
+  contributionRatio: number | null
+  direction: BusinessMetricDirection
+}
+
+export interface BusinessBreakdown {
+  id: string
+  title: string
+  description: string
+  display: 'bar' | 'table'
+  rows: BusinessBreakdownRow[]
+}
+
+export interface BusinessPresentation {
+  summary: string
+  summaryStatus: BusinessMetricStatus
+  conclusions: string[]
+  period: { startDate: string; endDate: string; label: string }
+  comparisonPeriod: { startDate: string; endDate: string; label: string }
+  metrics: BusinessMetric[]
+  highlights: BusinessHighlight[]
+  breakdowns: BusinessBreakdown[]
+  analysis: string[]
+  recommendations: string[]
+  detailMarkdown: string
+  dataContext: { label: string; dataNature: 'sample' | 'production' }
 }
 
 export interface ToolInfo {
@@ -62,6 +120,8 @@ export interface HealthResponse {
   timestamp: string
   llmAvailable: boolean
   skills?: number
+  dataEnvironment?: string
+  dataCoverage?: string
 }
 
 export interface ChatMessage {
@@ -73,4 +133,5 @@ export interface ChatMessage {
   approvalData?: AgentResponse
   traceId?: string
   agentData?: AgentResponse
+  businessData?: BusinessPresentation
 }

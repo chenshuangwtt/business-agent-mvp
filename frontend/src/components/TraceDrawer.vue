@@ -78,6 +78,8 @@ const META: Record<string, { label: string; icon: any; tone: string }> = {
   approval_required: { label: '等待审批', icon: AlertTriangle, tone: 'trace-warning' },
   approval_result: { label: '审批结果', icon: AlertTriangle, tone: 'trace-warning' },
   fallback: { label: '降级处理', icon: RefreshCw, tone: 'trace-warning' },
+  diagnosis_step: { label: '诊断下钻', icon: Brain, tone: 'trace-accent' },
+  diagnosis_complete: { label: '诊断完成', icon: CheckCircle2, tone: 'trace-success' },
   final_answer: { label: '最终回答', icon: FileText, tone: 'trace-success' },
 }
 
@@ -126,6 +128,10 @@ function summary(step: TraceStep): string {
       return data.approved ? '用户已批准' : '用户已拒绝'
     case 'fallback':
       return data.reason || data.toolName || '使用降级策略'
+    case 'diagnosis_step':
+      return `${data.action || '诊断'} · ${data.result_summary || ''}`.slice(0, 80)
+    case 'diagnosis_complete':
+      return `${data.anomalyCount || 0} 个异常 · ${data.stopReason || ''}`
     case 'final_answer':
       return (data.content || '').slice(0, 60)
     default:

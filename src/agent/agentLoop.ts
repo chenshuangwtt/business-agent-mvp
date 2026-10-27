@@ -12,7 +12,11 @@ import { createTrace, addTraceStep, getTrace } from "../trace/traceRecorder.js";
 import { withTimeout, withRetry } from "../utils/timeout.js";
 import { parallelWithLimit } from "../utils/concurrency.js";
 import { logger } from "../utils/logger.js";
-import { cleanMarkdownOutput } from "../utils/markdown.js";
+import { formatBusinessAnswer } from "../utils/markdown.js";
+import { buildBusinessPresentation } from "../business/presentation.js";
+import { getDiagnosisState } from "../tools/diagnoseBusiness.js";
+import { getDataset } from "../business/datasetStore.js";
+import { getBusinessDataCoverage } from "../business/businessRepository.js";
 import { selectSkill } from "../skills/skillSelector.js";
 import { getSkill } from "../skills/skillRegistry.js";
 import {
@@ -25,8 +29,12 @@ import type { AgentResponse, AgentErrorCode, Trace, ToolContext, Session } from 
 
 const MAX_TOOL_ROUNDS = parseInt(process.env.MAX_TOOL_ROUNDS || "6");
 const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || "30000");
-const DEMO_DATA_START = process.env.DEMO_DATA_START || "2026-05-25";
-const DEMO_DATA_END = process.env.DEMO_DATA_END || "2026-06-03";
+const DEMO_REFERENCE_DATE = (() => {
+  const coverage = getBusinessDataCoverage();
+  const configured = process.env.DEMO_REFERENCE_DATE || coverage.endDate;
+  if (configured < coverage.startDate) return coverage.startDate;
+  return configured > coverage.endDate ? coverage.endDate : configured;
+})();
 
 interface SkillRuntimeContext {
   skill: SkillDefinition | null;
@@ -49,11 +57,11 @@ function buildRuntimeContext(): string {
     "",
     `- 当前日期：${today}`,
     `- 当前时间模式：${timeMode}`,
-    `- 当前 demo 订单数据范围：${DEMO_DATA_START} 到 ${DEMO_DATA_END}`,
-    "- demo 模式：相对时间映射到固定演示数据窗口。",
+    `- demo 参考日期：${DEMO_REFERENCE_DATE}`,
+    "- demo 模式：相对时间按 demo 参考日期解析，仍保留本周、上周和最近 7 天的边界。",
     "- production 模式：相对时间按真实当前日期解析，例如本周为当前自然周、本月为当前自然月、今天为当前日期。",
     "- 报告周期必须以工具查询周期为准。",
-    "- 如果一次 `query_orders` 返回 `count=0`，不要编造订单数据；production 模式不要自动改用 demo 数据窗口。",
+    "- `query_orders` 只返回 dataset_id 和汇总；后续工具必须使用 dataset_id，不能要求订单明细。",
   ].join("\n");
 }
 
@@ -113,6 +121,12 @@ export async function runAgent(
     constraints: selectedSkill?.constraints || [],
     expectedSections: selectedSkill?.expectedSections || [],
   });
+
+  if (resolvedTimeRange.dataAvailable === false) {
+    const answer = `当前示例数据仅覆盖 ${getBusinessDataCoverage().startDate} 至 ${getBusinessDataCoverage().endDate}，所选日期暂无可用数据，无法进行可靠比较。`;
+    addTraceStep(trace, "final_answer", { content: answer, reason: "DATA_RANGE_UNAVAILABLE" });
+    return { status: "success", traceId: trace.traceId, sessionId: session.sessionId, answer };
+  }
 
   // 3. 初始化会话消息
   if (session.messages.length === 0) {
@@ -239,7 +253,7 @@ async function agentLoopCore(
 
     // 如果是最终回答
     if (choice.finish_reason === "stop" || !assistantMessage.tool_calls?.length) {
-      const answer = cleanMarkdownOutput(assistantMessage.content || "无法生成回答");
+      const answer = formatBusinessAnswer(assistantMessage.content || "无法生成回答");
       addTraceStep(trace, "final_answer", { content: answer });
       logger.info(`[Agent] 完成: traceId=${trace.traceId}`);
       return {
@@ -247,6 +261,7 @@ async function agentLoopCore(
         traceId: trace.traceId,
         sessionId: session.sessionId,
         answer,
+        businessData: findBusinessPresentation(messages),
       };
     }
 
@@ -344,7 +359,7 @@ async function agentLoopCore(
 
       // 审批检查：需要审批的工具立即暂停整个批次
       if (tool.requiresApproval) {
-        const approvalMessage = `工具 "${toolName}" (${getRiskLevelLabel(tool.riskLevel)}) 需要用户确认后执行`;
+        const approvalMessage = formatApprovalMessage(toolName, parsedArgs, tool.riskLevel);
         const approval = createApproval(
           trace.traceId,
           session.sessionId,
@@ -639,6 +654,7 @@ export async function resumeAgent(
       traceId: trace.traceId,
       sessionId: session.sessionId,
       answer,
+      businessData: findBusinessPresentation(session.messages),
     };
   }
 
@@ -718,11 +734,21 @@ async function handleFallback(
     reason: "LLM 不可用，使用 fallback 模式",
   });
 
+  if (!hasStructuredBusinessIntent(userMessage)) {
+    const answer = buildNonDiagnosticFallbackAnswer(userMessage);
+    addTraceStep(trace, "final_answer", { content: answer });
+    return {
+      status: "success",
+      traceId: trace.traceId,
+      sessionId: session.sessionId,
+      answer,
+    };
+  }
+
   try {
     const { queryOrdersTool } = await import("../tools/queryOrders.js");
-    const { calculateMetricsTool } = await import("../tools/calculateMetrics.js");
-    const { findAnomaliesTool } = await import("../tools/findAnomalies.js");
-    const { generateReportTool } = await import("../tools/generateReport.js");
+    const { diagnoseBusinessTool } = await import("../tools/diagnoseBusiness.js");
+    const { generateDiagnosisReportTool } = await import("../tools/generateDiagnosisReport.js");
 
     const toolContext: ToolContext = {
       traceId: trace.traceId,
@@ -741,33 +767,30 @@ async function handleFallback(
       toolContext
     );
 
-    const metrics = await calculateMetricsTool.execute(
-      { orders: queryResult.orders, query: queryResult.query },
+    const diagnosis = await diagnoseBusinessTool.execute(
+      { dataset_id: queryResult.dataset_id, question: userMessage },
       toolContext
     );
+    for (const step of diagnosis.steps) {
+      addTraceStep(trace, "diagnosis_step", step);
+    }
+    addTraceStep(trace, "diagnosis_complete", {
+      diagnosisId: diagnosis.diagnosis_id,
+      goal: diagnosis.goal,
+      anomalyCount: diagnosis.anomalies.length,
+      stopReason: diagnosis.stop_reason,
+    });
+    const report = await generateDiagnosisReportTool.execute({ dataset_id: queryResult.dataset_id, diagnosis_id: diagnosis.diagnosis_id }, toolContext);
 
-    const anomalyResult = await findAnomaliesTool.execute(
-      { orders: queryResult.orders, metrics },
-      toolContext
-    );
-
-    const report = await generateReportTool.execute(
-      {
-        metrics,
-        anomalies: anomalyResult.anomalies,
-        rules: [],
-        template: "经营分析简报",
-      },
-      toolContext
-    );
-
-    addTraceStep(trace, "final_answer", { content: report.content });
+    const answer = formatBusinessAnswer(report.content);
+    addTraceStep(trace, "final_answer", { content: answer });
 
     return {
       status: "success",
       traceId: trace.traceId,
       sessionId: session.sessionId,
-      answer: report.content,
+      answer,
+      businessData: report.businessPresentation,
     };
   } catch (err: any) {
     const errorMsg = `Fallback 处理失败: ${err.message}`;
@@ -847,12 +870,52 @@ function formatApprovalResult(toolName: string, messages: any[]): string {
     try {
       const result = JSON.parse(lastToolMsg.content);
       if (toolName === "export_report") {
-        return `报告已成功导出。\n\n${result.message || ""}\n文件路径：${result.path || "unknown"}`;
+        return `报告已导出为 ${result.filename || "指定文件"}。`;
       }
       if (toolName === "send_report_email") {
-        return `${result.message || "邮件已模拟发送"}`;
+        return `报告已发送至 ${result.to || "指定收件人"}。`;
       }
     } catch {}
   }
   return "操作已完成";
+}
+
+function formatApprovalMessage(toolName: string, args: any, riskLevel: string): string {
+  if (toolName === "export_report") return `将报告导出为 ${args.filename}，请确认。`;
+  if (toolName === "send_report_email") return `将报告发送至 ${args.to}，请确认。`;
+  return `${getRiskLevelLabel(riskLevel as any)}操作需要确认后执行。`;
+}
+
+function findBusinessPresentation(messages: any[]) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== "tool" || typeof message.content !== "string") continue;
+    try {
+      const result = JSON.parse(message.content);
+      if (result.businessPresentation) return result.businessPresentation;
+      if (result.diagnosis_id) {
+        const diagnosis = getDiagnosisState(result.diagnosis_id);
+        if (!diagnosis) continue;
+        try {
+          return buildBusinessPresentation(diagnosis, getDataset(diagnosis.dataset_id).recordCount);
+        } catch {
+          return buildBusinessPresentation(diagnosis);
+        }
+      }
+    } catch {
+      // A malformed tool result remains available in Trace; it is not a business presentation.
+    }
+  }
+  return undefined;
+}
+
+function hasStructuredBusinessIntent(message: string): boolean {
+  if (/什么是|概念|解释一下|如何计算|怎么计算/.test(message)) return false;
+  return /订单|支付|退款|销售|渠道|商品|地区|经营|异常|本周|上周|本月|最近/.test(message);
+}
+
+function buildNonDiagnosticFallbackAnswer(message: string): string {
+  if (/退款率|退款支付金额比/.test(message) && /如何计算|怎么计算|计算/.test(message)) {
+    return "退款支付金额比 = 成功退款金额 / 成功支付金额。支付金额按支付成功时间统计，退款金额按退款完成时间统计。";
+  }
+  return "请提供需要分析的经营指标、时间范围或业务现象，我会据此整理结论和数据证据。";
 }

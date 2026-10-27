@@ -109,7 +109,7 @@ test("skill tools limit LLM tool definitions", () => {
   const tools = getToolsForLLM(skill.tools);
   const names = tools.map((tool) => tool.function.name);
 
-  assert.deepEqual(names, skill.tools);
+  assert.deepEqual([...names].sort(), [...skill.tools].sort());
   assert.equal(listSkills().length, 3);
 });
 
@@ -175,8 +175,40 @@ test("skill approval flag does not create approval before approval tool call", a
     const selected = trace?.steps.find((step) => step.type === "skill_selected");
 
     assert.equal(result.status, "success");
+    assert.ok(result.businessData?.metrics.length);
     assert.equal(selected?.data.skillName, "report_delivery");
     assert.equal(selected?.data.requiresApproval, true);
+  } finally {
+    restoreEnv("LLM_PROFILES", oldProfiles);
+    restoreEnv("OPENAI_API_KEY", oldOpenAIKey);
+    restoreEnv("LLM_API_KEY", oldLLMKey);
+    restoreEnv("LLM_PRIMARY_API_KEY", oldPrimaryKey);
+    restoreEnv("LLM_BACKUP_API_KEY", oldBackupKey);
+  }
+});
+
+test("concept questions do not force structured KPI cards without a diagnosis", async () => {
+  const oldProfiles = process.env.LLM_PROFILES;
+  const oldOpenAIKey = process.env.OPENAI_API_KEY;
+  const oldLLMKey = process.env.LLM_API_KEY;
+  const oldPrimaryKey = process.env.LLM_PRIMARY_API_KEY;
+  const oldBackupKey = process.env.LLM_BACKUP_API_KEY;
+
+  initToolRegistry();
+  loadSkills();
+
+  try {
+    delete process.env.LLM_PROFILES;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.LLM_API_KEY;
+    delete process.env.LLM_PRIMARY_API_KEY;
+    delete process.env.LLM_BACKUP_API_KEY;
+
+    const result = await runAgent("退款率如何计算？");
+
+    assert.equal(result.status, "success");
+    assert.equal(result.businessData, undefined);
+    assert.match(result.answer || "", /成功退款金额/);
   } finally {
     restoreEnv("LLM_PROFILES", oldProfiles);
     restoreEnv("OPENAI_API_KEY", oldOpenAIKey);

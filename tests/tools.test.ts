@@ -1,320 +1,138 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { z } from "zod";
-import { calculateMetricsTool } from "../src/tools/calculateMetrics.ts";
-import { exportReportTool } from "../src/tools/exportReport.ts";
-import { findAnomaliesTool } from "../src/tools/findAnomalies.ts";
-import { generateReportTool } from "../src/tools/generateReport.ts";
 import { queryOrdersTool } from "../src/tools/queryOrders.ts";
+import { calculateMetricsTool } from "../src/tools/calculateMetrics.ts";
+import { comparePeriodMetricsTool } from "../src/tools/comparePeriodMetrics.ts";
+import { detectAnomaliesTool } from "../src/tools/detectAnomalies.ts";
+import { exportReportTool } from "../src/tools/exportReport.ts";
+import { diagnoseBusinessTool } from "../src/tools/diagnoseBusiness.ts";
+import { generateDiagnosisReportTool } from "../src/tools/generateDiagnosisReport.ts";
 import { execToolWithTrace } from "../src/agent/agentLoop.ts";
 import { getToolsForLLM, initToolRegistry } from "../src/agent/toolRegistry.ts";
 import { createTrace } from "../src/trace/traceRecorder.ts";
-import type { AgentTool, Order, ToolContext } from "../src/agent/types.ts";
+import { getBusinessData } from "../src/business/businessRepository.ts";
+import type { AgentTool, ToolContext } from "../src/agent/types.ts";
 
-const context: ToolContext = {
-  traceId: "trace-test",
-  logger: () => {},
-};
+const context: ToolContext = { traceId: "trace-test", logger: () => {} };
 
-function sampleOrders(): Order[] {
-  return [
-    {
-      order_id: "ORD-A",
-      order_date: "2026-06-01",
-      customer_id: "C001",
-      product_id: "P001",
-      category: "course",
-      quantity: 1,
-      unit_price: 100,
-      total_amount: 100,
-      status: "paid",
-      channel: "web",
-      region: "east",
-      refund_amount: 0,
-    },
-    {
-      order_id: "ORD-B",
-      order_date: "2026-06-01",
-      customer_id: "C002",
-      product_id: "P002",
-      category: "consulting",
-      quantity: 1,
-      unit_price: 6000,
-      total_amount: 6000,
-      status: "paid",
-      channel: "miniapp",
-      region: "south",
-      refund_amount: 0,
-    },
-    {
-      order_id: "ORD-C",
-      order_date: "2026-06-02",
-      customer_id: "C003",
-      product_id: "P003",
-      category: "course",
-      quantity: 1,
-      unit_price: 300,
-      total_amount: 300,
-      status: "refunded",
-      channel: "web",
-      region: "east",
-      refund_amount: 300,
-    },
-  ];
-}
-
-test("query_orders validates date range and reads demo data", async () => {
-  const result = await queryOrdersTool.execute(
-    {
-      start_date: "2026-05-25",
-      end_date: "2026-06-03",
-      status: "all",
-      channel: "all",
-      region: "all",
-    },
-    context
-  );
-
-  assert.equal(result.count, 200);
-  assert.equal(result.orders.length, 200);
-  assert.deepEqual(result.availableRange, {
-    start_date: "2026-05-25",
-    end_date: "2026-06-03",
-  });
-
-  await assert.rejects(
-    () =>
-      queryOrdersTool.execute(
-        {
-          start_date: "2026-06-03",
-          end_date: "2026-05-25",
-          status: "all",
-          channel: "all",
-          region: "all",
-        },
-        context
-      ),
-    (error: any) =>
-      error?.code === "INVALID_ARGS" && error?.message === "开始日期不能晚于结束日期"
-  );
+test("demo data keeps order, payment and refund references valid", () => {
+  const data = getBusinessData();
+  const orderIds = new Set(data.orders.map((item) => item.order_id));
+  const paymentIds = new Set(data.payments.map((item) => item.payment_id));
+  assert.ok(data.orders.length > 800);
+  assert.ok(data.orderItems.every((item) => orderIds.has(item.order_id) && item.line_amount_cents === item.quantity * item.unit_price_cents));
+  assert.ok(data.payments.every((item) => orderIds.has(item.order_id) && Number.isInteger(item.amount_cents)));
+  assert.ok(data.refunds.every((item) => orderIds.has(item.order_id) && paymentIds.has(item.payment_id) && Number.isInteger(item.refund_amount_cents)));
 });
 
-test("query_orders returns demo range hint when query is empty", async () => {
-  const result = await queryOrdersTool.execute(
-    {
-      start_date: "2025-03-17",
-      end_date: "2025-03-23",
-      status: "all",
-      channel: "all",
-      region: "all",
-    },
-    context
-  );
-
-  assert.equal(result.count, 0);
-  assert.match(result.emptyReason, /2026-05-25 到 2026-06-03/);
-  assert.deepEqual(result.suggestedQuery, {
-    start_date: "2026-05-25",
-    end_date: "2026-06-03",
-    status: "all",
-    channel: "all",
-    region: "all",
-  });
+test("query_orders creates a bounded server-side dataset without raw orders", async () => {
+  const result = await queryOrdersTool.execute({ start_date: "2026-09-24", end_date: "2026-09-30", channel: "all", region: "all" }, context);
+  assert.match(result.dataset_id, /^dataset-/);
+  assert.ok(result.record_count > 0);
+  assert.equal((result as any).orders, undefined);
+  await assert.rejects(() => queryOrdersTool.execute({ start_date: "2026-07-19", end_date: "2026-07-13" }, context), /开始日期/);
 });
 
-test("calculate_metrics keeps financial numbers deterministic", async () => {
-  const metrics = await calculateMetricsTool.execute({ orders: sampleOrders() }, context);
-
-  assert.equal(metrics.gmv, 6400);
-  assert.equal(metrics.net_sales, 6100);
-  assert.equal(metrics.total_orders, 3);
-  assert.equal(metrics.paid_orders, 2);
-  assert.equal(metrics.refund_amount, 300);
-  assert.equal(metrics.refund_rate, 4.69);
-  assert.equal(metrics.avg_order_value, 3050);
-  assert.equal(metrics.sales_by_channel.web, 100);
-  assert.equal(metrics.sales_by_channel.miniapp, 6000);
-  assert.deepEqual(metrics.period, {
-    start_date: "2026-06-01",
-    end_date: "2026-06-02",
-    label: "2026-06-01 至 2026-06-02",
-  });
+test("metrics use cents and compare equal-length prior period", async () => {
+  const dataset = await queryOrdersTool.execute({ start_date: "2026-09-24", end_date: "2026-09-30", channel: "all", region: "all" }, context);
+  const metrics = await calculateMetricsTool.execute({ dataset_id: dataset.dataset_id }, context);
+  const comparison = await comparePeriodMetricsTool.execute({ dataset_id: dataset.dataset_id }, context);
+  assert.equal(metrics.metrics.period.label, "2026-09-24 至 2026-09-30");
+  assert.ok(Number.isInteger(metrics.metrics.successful_payment_amount_cents));
+  assert.equal(comparison.previous.period.label, "2026-09-17 至 2026-09-23");
+  assert.ok(["calculated", "not_calculable"].includes(comparison.changes.net_cash_inflow_cents.change_rate_status));
 });
 
-test("calculate_metrics uses query period when provided", async () => {
-  const metrics = await calculateMetricsTool.execute(
-    {
-      orders: sampleOrders(),
-      query: { start_date: "2026-05-25", end_date: "2026-06-03" },
-    },
-    context
-  );
-
-  assert.deepEqual(metrics.period, {
-    start_date: "2026-05-25",
-    end_date: "2026-06-03",
-    label: "2026-05-25 至 2026-06-03",
-  });
-});
-
-test("generate_report fallback uses metrics period in report", async () => {
-  const oldProfiles = process.env.LLM_PROFILES;
-  const oldOpenAIKey = process.env.OPENAI_API_KEY;
-  const oldLLMKey = process.env.LLM_API_KEY;
-  const oldPrimaryKey = process.env.LLM_PRIMARY_API_KEY;
-  const oldBackupKey = process.env.LLM_BACKUP_API_KEY;
-
-  try {
-    delete process.env.LLM_PROFILES;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.LLM_API_KEY;
-    delete process.env.LLM_PRIMARY_API_KEY;
-    delete process.env.LLM_BACKUP_API_KEY;
-
-    const metrics = await calculateMetricsTool.execute(
-      {
-        orders: sampleOrders(),
-        query: { start_date: "2026-05-25", end_date: "2026-06-03" },
-      },
-      context
-    );
-    const result = await generateReportTool.execute(
-      { metrics, anomalies: [], rules: [], template: "经营分析简报" },
-      context
-    );
-
-    assert.match(result.content, /2026-05-25 至 2026-06-03/);
-    assert.doesNotMatch(result.content, /报告周期\*\*：2026-05-25 至 2026-05-31/);
-  } finally {
-    restoreEnv("LLM_PROFILES", oldProfiles);
-    restoreEnv("OPENAI_API_KEY", oldOpenAIKey);
-    restoreEnv("LLM_API_KEY", oldLLMKey);
-    restoreEnv("LLM_PRIMARY_API_KEY", oldPrimaryKey);
-    restoreEnv("LLM_BACKUP_API_KEY", oldBackupKey);
-  }
-});
-
-test("find_anomalies flags large orders and high refund days", async () => {
-  const metrics = await calculateMetricsTool.execute({ orders: sampleOrders() }, context);
-  const result = await findAnomaliesTool.execute({ orders: sampleOrders(), metrics }, context);
-  const types = result.anomalies.map((item: any) => item.type);
-
-  assert.ok(types.includes("large_order"));
-  assert.ok(types.includes("high_daily_refund"));
+test("anomaly diagnosis identifies deterministic seeded signals", async () => {
+  const dataset = await queryOrdersTool.execute({ start_date: "2026-09-24", end_date: "2026-09-30", channel: "all", region: "all" }, context);
+  const result = await detectAnomaliesTool.execute({ dataset_id: dataset.dataset_id }, context);
+  assert.ok(result.anomalies.some((item: any) => item.type === "refund_ratio_increase"));
+  assert.ok(result.anomalies.some((item: any) => item.type === "high_frequency_ordering"));
 });
 
 test("export_report only writes inside reports directory", async () => {
   const filename = "test-export-report.md";
   const filePath = join(process.cwd(), "reports", filename);
-
   try {
-    const result = await exportReportTool.execute(
-      {
-        filename,
-        content: "# Test Report",
-      },
-      context
-    );
-
+    const result = await exportReportTool.execute({
+      filename,
+      content: "# Test Report\n\nquery_orders 已完成\n\ndata/orders.csv",
+    }, context);
     assert.equal(result.success, true);
-    assert.equal(result.path, `reports/${filename}`);
     assert.equal(existsSync(filePath), true);
+    const exported = readFileSync(filePath, "utf-8");
+    assert.equal(exported.includes("query_orders"), false);
+    assert.equal(exported.includes("orders.csv"), false);
+    await assert.rejects(() => exportReportTool.execute({ filename: "../escape.md", content: "# Bad" }, context), /文件名/);
+  } finally { if (existsSync(filePath)) rmSync(filePath); }
+});
 
-    await assert.rejects(
-      () =>
-        exportReportTool.execute(
-          {
-            filename: "../escape.md",
-            content: "# Bad",
-          },
-          context
-        ),
-      /文件名/
-    );
-  } finally {
-    if (existsSync(filePath)) {
-      rmSync(filePath);
-    }
-  }
+test("diagnosis report keeps business evidence without implementation details", async () => {
+  const dataset = await queryOrdersTool.execute({ start_date: "2026-09-24", end_date: "2026-09-30", channel: "all", region: "all" }, context);
+  const diagnosis = await diagnoseBusinessTool.execute({
+    dataset_id: dataset.dataset_id,
+    question: "最近一周退款为什么增加了？请说明计算依据。",
+  }, context);
+  const report = await generateDiagnosisReportTool.execute({
+    dataset_id: dataset.dataset_id,
+    diagnosis_id: diagnosis.diagnosis_id,
+  }, context);
+
+  assert.match(report.content, /2026-09-24 至 2026-09-30/);
+  assert.match(report.content, /成功退款金额/);
+  assert.match(report.content, /抖音|增长策略课程/);
+  assert.match(report.content, /计算依据/);
+  assert.doesNotMatch(report.content, /dataset_id|diagnosis_id|dataset-|diagnosis-|query_orders|\.csv|动态分析路径/);
+  assert.doesNotMatch(report.content, /\d+\s*分/);
+});
+
+test("normal diagnosis report explains metric changes without fabricating an alert", async () => {
+  const dataset = await queryOrdersTool.execute({ start_date: "2026-05-12", end_date: "2026-05-18", channel: "all", region: "all" }, context);
+  const diagnosis = await diagnoseBusinessTool.execute({
+    dataset_id: dataset.dataset_id,
+    question: "本周是否真的存在明显经营异常？",
+  }, context);
+  const report = await generateDiagnosisReportTool.execute({
+    dataset_id: dataset.dataset_id,
+    diagnosis_id: diagnosis.diagnosis_id,
+  }, context);
+
+  assert.match(report.content, /当前未触发既定预警阈值/);
+  assert.match(report.content, /成功支付金额增加/);
+  assert.equal(report.content.includes("风险提示"), false);
+});
+
+test("refund contribution report answers the product ranking even without an anomaly alert", async () => {
+  const dataset = await queryOrdersTool.execute({ start_date: "2026-04-08", end_date: "2026-04-14", channel: "all", region: "all" }, context);
+  const diagnosis = await diagnoseBusinessTool.execute({
+    dataset_id: dataset.dataset_id,
+    question: "哪个商品对退款增长影响最大？",
+  }, context);
+  const report = await generateDiagnosisReportTool.execute({
+    dataset_id: dataset.dataset_id,
+    diagnosis_id: diagnosis.diagnosis_id,
+  }, context);
+
+  assert.match(report.content, /退款增长最多的商品是“数据分析课程”/);
+  assert.match(report.content, /变化来源分析/);
+  assert.doesNotMatch(report.content, /当前未发现符合预警规则的明显异常/);
 });
 
 test("tool JSON schema does not mark default fields as required", () => {
   initToolRegistry();
   const queryOrders = getToolsForLLM().find((tool) => tool.function.name === "query_orders");
-
-  assert.ok(queryOrders);
-  assert.deepEqual(queryOrders.function.parameters.required, ["start_date", "end_date"]);
+  assert.deepEqual(queryOrders?.function.parameters.required, ["start_date", "end_date"]);
 });
 
-test("fallback tool result records one fallback trace step", async () => {
+test("fallback results record one fallback trace step", async () => {
   const trace = createTrace();
   const traceDir = join(process.cwd(), "logs", trace.traceId);
-  const tool: AgentTool = {
-    name: "search_business_rules",
-    description: "test fallback result",
-    riskLevel: "low",
-    requiresApproval: false,
-    inputSchema: z.any(),
-    execute: async () => ({
-      results: [],
-      query: "指标口径",
-      total: 0,
-      fallback: true,
-      error: "业务规则检索失败，将使用默认规则",
-    }),
-  };
-
+  const tool: AgentTool = { name: "search_business_rules", description: "test", riskLevel: "low", requiresApproval: false, inputSchema: z.any(), execute: async () => ({ fallback: true, error: "fallback" }) };
   try {
-    await execToolWithTrace("search_business_rules", tool, { query: "指标口径" }, trace, false);
-    const fallbackSteps = trace.steps.filter((step) => step.type === "fallback");
-
-    assert.equal(fallbackSteps.length, 1);
-    assert.equal(fallbackSteps[0].data.toolName, "search_business_rules");
-  } finally {
-    if (existsSync(traceDir)) rmSync(traceDir, { recursive: true, force: true });
-  }
+    await execToolWithTrace(tool.name, tool, {}, trace, false);
+    assert.equal(trace.steps.filter((step) => step.type === "fallback").length, 1);
+  } finally { if (existsSync(traceDir)) rmSync(traceDir, { recursive: true, force: true }); }
 });
-
-test("search_business_rules thrown error fallback records one fallback trace step", async () => {
-  const trace = createTrace();
-  const traceDir = join(process.cwd(), "logs", trace.traceId);
-  const oldMaxRetry = process.env.MAX_RETRY;
-  const tool: AgentTool = {
-    name: "search_business_rules",
-    description: "test thrown fallback",
-    riskLevel: "low",
-    requiresApproval: false,
-    inputSchema: z.any(),
-    execute: async () => {
-      throw new Error("forced retrieval failure");
-    },
-  };
-
-  try {
-    process.env.MAX_RETRY = "0";
-    const resultJson = await execToolWithTrace(
-      "search_business_rules",
-      tool,
-      { query: "指标口径" },
-      trace,
-      false
-    );
-    const result = JSON.parse(resultJson);
-    const fallbackSteps = trace.steps.filter((step) => step.type === "fallback");
-
-    assert.equal(result.fallback, true);
-    assert.equal(fallbackSteps.length, 1);
-    assert.equal(fallbackSteps[0].data.toolName, "search_business_rules");
-  } finally {
-    if (oldMaxRetry === undefined) delete process.env.MAX_RETRY;
-    else process.env.MAX_RETRY = oldMaxRetry;
-    if (existsSync(traceDir)) rmSync(traceDir, { recursive: true, force: true });
-  }
-});
-
-function restoreEnv(key: string, value: string | undefined) {
-  if (value === undefined) delete process.env[key];
-  else process.env[key] = value;
-}

@@ -12,6 +12,7 @@ import {
 import { useApi } from '@/composables/useApi'
 import type { ChatMessage } from '@/types/api'
 import ApprovalCard from './ApprovalCard.vue'
+import BusinessDiagnosis from './BusinessDiagnosis.vue'
 
 const emit = defineEmits<{ openTrace: [traceId: string] }>()
 const api = useApi()
@@ -22,10 +23,12 @@ const scrollEl = ref<HTMLElement | null>(null)
 const isLoading = computed(() => api.loading.value)
 
 const suggestions = [
-  { icon: Search, text: '帮我分析本周订单情况' },
-  { icon: LineChart, text: '找出最近 7 天 GMV 异常波动' },
-  { icon: FileText, text: '生成一份本月经营分析报告' },
-  { icon: ShieldCheck, text: '查询退款率最高的商品并分析原因' },
+  { icon: Search, text: '本周退款为什么比上周增加？' },
+  { icon: LineChart, text: '哪个商品对退款增长影响最大？' },
+  { icon: LineChart, text: '小程序最近一周销售额为什么下降？' },
+  { icon: Search, text: '最近一个月哪个商品表现变化最大？' },
+  { icon: ShieldCheck, text: '最近一周是否存在异常购买或退款行为？' },
+  { icon: FileText, text: '本周是否真的存在明显经营异常？' },
 ]
 
 let msgId = 0
@@ -56,7 +59,7 @@ async function sendMessage() {
     if (data.traceId) addMsg('trace', '', { traceId: data.traceId })
 
     if (data.status === 'success') {
-      addMsg('agent', data.answer || '没有生成回答。', { agentData: data })
+      addMsg('agent', data.answer || '没有生成回答。', { agentData: data, businessData: data.businessData })
     } else if (data.status === 'need_approval') {
       addMsg('approval', '', { approvalId: data.approvalId, approvalData: data })
     } else {
@@ -76,7 +79,7 @@ async function handleApprove(approvalId: string, approved: boolean) {
     if (data.traceId) addMsg('trace', '', { traceId: data.traceId })
 
     if (data.status === 'success') {
-      addMsg('agent', data.answer || '操作已完成。', { agentData: data })
+      addMsg('agent', data.answer || '操作已完成。', { agentData: data, businessData: data.businessData })
     } else {
       addMsg('system', `错误：${data.message || data.code || '未知错误'}`)
     }
@@ -207,6 +210,7 @@ function renderMd(md: string): string {
   flushList()
   return out.join('')
 }
+
 </script>
 
 <template>
@@ -218,10 +222,10 @@ function renderMd(md: string): string {
             <div class="welcome-mark">
               <Bot :size="28" />
             </div>
-            <p class="eyebrow">经营分析 Agent</p>
-            <h1>把订单数据变成可执行的经营判断</h1>
+            <p class="eyebrow">经营异常诊断</p>
+            <h1>用分期对比定位经营异常</h1>
             <p>
-              你可以直接问订单、GMV、退款、异常和报告导出。需要高风险动作时，系统会先停下来让你审批。
+              可直接排查退款、渠道变化和高频下单。导出或发送报告前会请你确认。
             </p>
           </div>
 
@@ -248,7 +252,10 @@ function renderMd(md: string): string {
             <div class="agent-avatar">
               <Bot :size="15" />
             </div>
-            <div class="agent-bubble agent-content" v-html="renderMd(msg.content)"></div>
+            <BusinessDiagnosis v-if="msg.businessData" :data="msg.businessData" />
+            <div v-else class="agent-bubble agent-content">
+              <div v-html="renderMd(msg.content)"></div>
+            </div>
           </div>
 
           <div v-else-if="msg.role === 'trace' && msg.traceId" class="trace-row">
@@ -376,4 +383,5 @@ function renderMd(md: string): string {
   border-top: 1px solid var(--c-border);
   margin: 14px 0;
 }
+
 </style>

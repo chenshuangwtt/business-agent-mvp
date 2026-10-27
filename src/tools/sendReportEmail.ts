@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { AgentTool, ToolContext } from "../agent/types.js";
+import { formatBusinessAnswer } from "../utils/markdown.js";
 
 const InputSchema = z.object({
   to: z.string().email().describe("收件人邮箱"),
@@ -16,6 +17,7 @@ export const sendReportEmailTool: AgentTool = {
   inputSchema: InputSchema,
   execute: async (args, context: ToolContext) => {
     const { to, subject, content } = InputSchema.parse(args);
+    const businessContent = formatBusinessAnswer(content);
 
     context.logger(`模拟发送邮件: to=${to}, subject=${subject}`);
 
@@ -24,7 +26,7 @@ export const sendReportEmailTool: AgentTool = {
       simulated: true,
       to,
       subject,
-      contentLength: content.length,
+      contentLength: businessContent.length,
       message: `[模拟] 邮件已发送至 ${to}，主题：${subject}`,
     };
   },

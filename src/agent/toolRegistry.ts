@@ -6,6 +6,12 @@ import { searchBusinessRulesTool } from "../tools/searchBusinessRules.js";
 import { generateReportTool } from "../tools/generateReport.js";
 import { exportReportTool } from "../tools/exportReport.js";
 import { sendReportEmailTool } from "../tools/sendReportEmail.js";
+import { comparePeriodMetricsTool } from "../tools/comparePeriodMetrics.js";
+import { detectAnomaliesTool } from "../tools/detectAnomalies.js";
+import { drillDownAnomalyTool } from "../tools/drillDownAnomaly.js";
+import { getAnomalyEvidenceTool } from "../tools/getAnomalyEvidence.js";
+import { generateDiagnosisReportTool } from "../tools/generateDiagnosisReport.js";
+import { diagnoseBusinessTool } from "../tools/diagnoseBusiness.js";
 import { logger } from "../utils/logger.js";
 
 // 工具注册表
@@ -160,5 +166,11 @@ export function initToolRegistry(): void {
   registerTool(generateReportTool);
   registerTool(exportReportTool);
   registerTool(sendReportEmailTool);
+  registerTool(comparePeriodMetricsTool);
+  registerTool(detectAnomaliesTool);
+  registerTool(drillDownAnomalyTool);
+  registerTool(getAnomalyEvidenceTool);
+  registerTool(generateDiagnosisReportTool);
+  registerTool(diagnoseBusinessTool);
   logger.info(`[ToolRegistry] 初始化完成，共 ${tools.size} 个工具`);
 }

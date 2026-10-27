@@ -7,7 +7,7 @@ import {
   loadReportPrompt,
 } from "../llm/llmClient.js";
 import type { AgentTool, ToolContext } from "../agent/types.js";
-import { cleanMarkdownOutput } from "../utils/markdown.js";
+import { formatBusinessAnswer } from "../utils/markdown.js";
 
 const LLM_TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || "30000");
 
@@ -85,7 +85,7 @@ async function generateWithLLM(
     { timeoutMs: LLM_TIMEOUT_MS, label: "generate_report" }
   );
 
-  const content = cleanMarkdownOutput(result.response.choices[0]?.message?.content || "");
+  const content = formatBusinessAnswer(result.response.choices[0]?.message?.content || "");
   return {
     content,
     method: "llm",
@@ -188,9 +188,9 @@ function generateFallback(
   const replacements: Record<string, string> = {
     "{{period}}": reportPeriod.label,
     "{{generated_at}}": now,
-    "{{data_source}}": "data/orders.csv",
+    "{{data_source}}": "订单、支付和退款记录",
     "{{conclusion}}": llmFailed
-      ? "LLM 服务不可用或调用失败，本报告使用本地模板生成。指标来自工具计算，原因分析和建议需要人工进一步复核。"
+      ? "本报告基于当前可用经营数据生成；需要结合运营、履约和售后信息进一步复核具体原因。"
       : "本报告基于订单数据自动生成，包含核心指标、异常发现和行动建议。",
     "{{gmv}}": formatCurrency(metrics?.gmv),
     "{{net_sales}}": formatCurrency(metrics?.net_sales),
@@ -210,9 +210,7 @@ function generateFallback(
       "3. 检查低于平均水平的渠道是否存在投放、库存或页面转化问题。",
       "4. 对疑似重复下单客户建立观察名单，并同步客服或风控复核。",
     ].join("\n"),
-    "{{report_method}}": llmFailed
-      ? "LLM 调用失败，使用本地模板 fallback 生成"
-      : "无 LLM，使用本地模板 fallback 生成",
+    "{{report_method}}": "按当前可用数据生成",
     "{{risk_notes}}":
       "本报告基于当前可用订单数据和规则自动生成，适合作为经营排查入口；涉及处罚、财务调整或外部发送前应由负责人复核。",
   };
@@ -222,7 +220,7 @@ function generateFallback(
   }
 
   return {
-    content,
+    content: formatBusinessAnswer(content),
     method: "fallback",
     fallback: true,
     llmFailed,
